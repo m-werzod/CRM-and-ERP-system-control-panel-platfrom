@@ -102,6 +102,27 @@
   --shadow-md: 0 4px 10px -2px oklch(24% 0.012 255 / 0.1), 0 2px 4px -2px oklch(24% 0.012 255 / 0.06);
   --shadow-lg: 0 12px 28px -8px oklch(24% 0.012 255 / 0.16), 0 4px 10px -4px oklch(24% 0.012 255 / 0.08);
 
+
+  /* Module accents.
+     ---------------------------------------------------------------------
+     One hue per navigation section, used ONLY in the chrome: the sidebar, a
+     page's eyebrow, a dashboard tile. Never on a row, a badge or a cell.
+     That boundary is the whole design: status colour has to keep meaning
+     "overdue" or "present", so it cannot compete with decoration in the same
+     place. Here the colour is doing wayfinding -- an operator learns that
+     finance is green and stops reading the sidebar labels -- which is a job
+     worth spending hue on. */
+  --color-module-overview: oklch(52% 0.18 267);
+  --color-module-crm: oklch(58% 0.15 70);
+  --color-module-people: oklch(53% 0.17 245);
+  --color-module-academics: oklch(52% 0.19 300);
+  --color-module-attendance: oklch(52% 0.12 185);
+  --color-module-finance: oklch(50% 0.14 150);
+  --color-module-hr: oklch(55% 0.18 10);
+  --color-module-communication: oklch(52% 0.14 215);
+  --color-module-insights: oklch(53% 0.19 330);
+  --color-module-administration: oklch(48% 0.03 255);
+
   --sidebar-width: 15rem;
   --sidebar-width-collapsed: 3.25rem;
   --topbar-height: 3.25rem;
@@ -148,6 +169,18 @@
   --color-info-subtle: oklch(27% 0.05 240);
   --color-info-border: oklch(36% 0.07 240);
   --color-info-text: oklch(81% 0.1 240);
+  /* Module accents, lifted for a dark ground: the same hues at a lightness
+  that clears the surface instead of sinking into it. */
+  --color-module-overview: oklch(74% 0.15 267);
+  --color-module-crm: oklch(78% 0.13 70);
+  --color-module-people: oklch(74% 0.14 245);
+  --color-module-academics: oklch(74% 0.16 300);
+  --color-module-attendance: oklch(75% 0.11 185);
+  --color-module-finance: oklch(73% 0.13 150);
+  --color-module-hr: oklch(75% 0.15 10);
+  --color-module-communication: oklch(75% 0.12 215);
+  --color-module-insights: oklch(75% 0.16 330);
+  --color-module-administration: oklch(72% 0.02 255);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -187,6 +220,18 @@
     --color-info-subtle: oklch(27% 0.05 240);
     --color-info-border: oklch(36% 0.07 240);
     --color-info-text: oklch(81% 0.1 240);
+    /* Module accents, lifted for a dark ground: the same hues at a lightness
+    that clears the surface instead of sinking into it. */
+    --color-module-overview: oklch(74% 0.15 267);
+    --color-module-crm: oklch(78% 0.13 70);
+    --color-module-people: oklch(74% 0.14 245);
+    --color-module-academics: oklch(74% 0.16 300);
+    --color-module-attendance: oklch(75% 0.11 185);
+    --color-module-finance: oklch(73% 0.13 150);
+    --color-module-hr: oklch(75% 0.15 10);
+    --color-module-communication: oklch(75% 0.12 215);
+    --color-module-insights: oklch(75% 0.16 330);
+    --color-module-administration: oklch(72% 0.02 255);
   }
 }
 

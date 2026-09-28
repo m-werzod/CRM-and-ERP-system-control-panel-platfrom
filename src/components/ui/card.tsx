@@ -174,6 +174,14 @@ export function PageHeader({
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0 space-y-1">
           <h1 className="truncate text-xl font-semibold tracking-tight">{title}</h1>
+          {/* A short rule in the section's colour, set by the shell on <main>.
+              It ties the page to the dot beside its sidebar section without
+              tinting a panel -- so status colour keeps the field to itself.
+              Falls back to the accent on any screen outside the nav tree. */}
+          <span
+            aria-hidden="true"
+            className="block h-0.5 w-8 rounded-full bg-[var(--section,var(--color-accent))]"
+          />
           {description && (
             <p className="max-w-2xl text-xs text-[var(--color-text-muted)]">{description}</p>
           )}

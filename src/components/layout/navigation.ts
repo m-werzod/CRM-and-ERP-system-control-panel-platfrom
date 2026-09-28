@@ -436,3 +436,28 @@ export function mobilePrimaryNavigation(has: (permission: string) => boolean): N
     .filter((item) => item.mobilePrimary)
     .filter((item) => item.permissions === null || item.permissions.some(has));
 }
+
+/**
+ * The section a path belongs to, by its dictionary key.
+ *
+ * Used to carry a module's accent colour out of the sidebar and into the page
+ * itself, so the header of the invoices screen agrees with the green dot next to
+ * "Finance". Longest matching href wins, for the same reason `isNavItemActive`
+ * prefers one: `/settings/users` belongs to Administration through its own
+ * entry, not through `/settings`.
+ */
+export function sectionForPath(pathname: string): string | null {
+  let best: { label: string; length: number } | null = null;
+
+  for (const section of NAV_SECTIONS) {
+    for (const item of section.items) {
+      const matches = pathname === item.href || pathname.startsWith(`${item.href}/`);
+      if (!matches) continue;
+      if (!best || item.href.length > best.length) {
+        best = { label: section.label, length: item.href.length };
+      }
+    }
+  }
+
+  return best?.label ?? null;
+}

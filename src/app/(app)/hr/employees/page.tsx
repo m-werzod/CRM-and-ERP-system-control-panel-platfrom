@@ -124,7 +124,7 @@ export default async function EmployeesPage({
                     {row.position}
                     {row.isTeacher && (
                       <Badge tone="info" size="sm" className="ml-1.5">
-                        {t.t('nav.students')}
+                        {t.t('employees.fields.isTeacher')}
                       </Badge>
                     )}
                   </TD>

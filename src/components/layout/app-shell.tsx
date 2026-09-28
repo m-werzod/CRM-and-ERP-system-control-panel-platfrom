@@ -3,9 +3,9 @@
 import { LogOut, Menu, X } from 'lucide-react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { useState, type ReactNode } from 'react';
+import { useState, type CSSProperties, type ReactNode } from 'react';
 import { useTranslator } from '@/components/i18n/provider';
-import { isNavItemActive, visibleNavigation } from '@/components/layout/navigation';
+import { isNavItemActive, sectionForPath, visibleNavigation } from '@/components/layout/navigation';
 import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { apiPost } from '@/lib/api-client';
@@ -35,6 +35,26 @@ const BUILT_ROUTES: ReadonlySet<string> = new Set([
   '/settings/users',
 ]);
 
+/**
+ * Navigation section to accent token.
+ *
+ * Keyed by the section's dictionary key rather than its translated label, so the
+ * colour survives a language change -- a receptionist who has learned that
+ * finance is green keeps that in Uzbek and in Russian.
+ */
+const SECTION_TONE: Readonly<Record<string, string>> = {
+  'nav.overview': 'var(--color-module-overview)',
+  'nav.crm': 'var(--color-module-crm)',
+  'nav.people': 'var(--color-module-people)',
+  'nav.academics': 'var(--color-module-academics)',
+  'nav.attendance': 'var(--color-module-attendance)',
+  'nav.finance': 'var(--color-module-finance)',
+  'nav.hr': 'var(--color-module-hr)',
+  'nav.communication': 'var(--color-module-communication)',
+  'nav.insights': 'var(--color-module-insights)',
+  'nav.administration': 'var(--color-module-administration)',
+};
+
 export interface AppShellProps {
   readonly displayName: string;
   readonly email: string;
@@ -49,6 +69,10 @@ export function AppShell({ displayName, email, permissions, children }: AppShell
   const pathname = usePathname();
   const [menuOpen, setMenuOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
+
+  // The section the current page belongs to, so its accent can travel out of
+  // the sidebar and into the page header.
+  const activeTone = SECTION_TONE[sectionForPath(pathname) ?? ''] ?? 'var(--color-accent)';
 
   const held = new Set(permissions);
   const sections = visibleNavigation((permission) => held.has(permission))
@@ -108,8 +132,22 @@ export function AppShell({ displayName, email, permissions, children }: AppShell
 
           <nav className="space-y-4">
             {sections.map((section) => (
-              <div key={section.label}>
-                <h2 className="px-2 pb-1 text-2xs font-semibold uppercase tracking-wide text-[var(--color-text-subtle)]">
+              <div
+                key={section.label}
+                // One custom property per section; every colour below reads from
+                // it, so a section's hue is declared once rather than threaded
+                // through six class names.
+                style={
+                  {
+                    '--section': SECTION_TONE[section.label] ?? 'var(--color-accent)',
+                  } as CSSProperties
+                }
+              >
+                <h2 className="flex items-center gap-1.5 px-2 pb-1 text-2xs font-semibold uppercase tracking-wide text-[var(--color-text-subtle)]">
+                  <span
+                    aria-hidden="true"
+                    className="size-1.5 shrink-0 rounded-full bg-[var(--section)]"
+                  />
                   {t.t(section.label)}
                 </h2>
                 <ul className="space-y-0.5">
@@ -123,14 +161,27 @@ export function AppShell({ displayName, email, permissions, children }: AppShell
                           aria-current={active ? 'page' : undefined}
                           onClick={() => setMenuOpen(false)}
                           className={cn(
-                            'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
-                            'focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-border-focus)]',
+                            // The left rail is always present and transparent
+                            // when inactive, so nothing shifts by 2px when the
+                            // active item changes.
+                            'flex items-center gap-2 rounded-md border-l-2 border-transparent py-1.5 pl-1.5 pr-2 text-sm',
+                            'transition-colors focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--color-border-focus)]',
                             active
-                              ? 'bg-[var(--color-surface-sunken)] font-medium text-[var(--color-text)]'
+                              ? 'border-l-[var(--section)] bg-[var(--color-surface-sunken)] font-medium text-[var(--color-text)]'
                               : 'text-[var(--color-text-muted)] hover:bg-[var(--color-surface-hover)] hover:text-[var(--color-text)]',
                           )}
                         >
-                          <Icon className="size-4 shrink-0" aria-hidden="true" />
+                          <Icon
+                            className={cn(
+                              'size-4 shrink-0',
+                              // Full strength on the current page, carried at
+                              // reduced opacity elsewhere: the section stays
+                              // identifiable without ten saturated icons
+                              // fighting for the eye at once.
+                              active ? 'text-[var(--section)]' : 'text-[var(--section)] opacity-55',
+                            )}
+                            aria-hidden="true"
+                          />
                           {t.t(item.label)}
                         </Link>
                       </li>
@@ -161,7 +212,11 @@ export function AppShell({ displayName, email, permissions, children }: AppShell
           </div>
         </aside>
 
-        <main id="main" className="min-w-0 px-4 py-5 lg:px-6">
+        <main
+          id="main"
+          className="min-w-0 px-4 py-5 lg:px-6"
+          style={{ '--section': activeTone } as CSSProperties}
+        >
           {children}
         </main>
       </div>
