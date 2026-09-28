@@ -1,0 +1,75 @@
+# Optional. The default development path needs NO Docker: `npm run db:up` runs a
+# real PostgreSQL 17 cluster from the binaries shipped by @embedded-postgres.
+#
+# Use this instead when you have Docker and would rather not keep a cluster
+# inside the project directory, or when you want Redis for the queue and rate
+# limiter. After `docker compose up -d`, point DATABASE_URL at port 55432 exactly
+# as the embedded cluster uses, so no other configuration changes.
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: edu-crm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: edu_admin
+      POSTGRES_PASSWORD: edu_dev_password
+      POSTGRES_DB: edu_crm_erp
+      # C locale matches the embedded cluster, so index behaviour and sort order
+      # are identical between the two development paths.
+      POSTGRES_INITDB_ARGS: '--locale=C --encoding=UTF8'
+    ports:
+      # Bound to loopback only: a development database must not be reachable
+      # from the local network.
+      - '127.0.0.1:55432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U edu_admin -d edu_crm_erp']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: edu-crm-redis
+    restart: unless-stopped
+    # Only needed if you set QUEUE_DRIVER=redis or RATE_LIMIT_DRIVER=redis.
+    # The database drivers are the default and need none of this.
+    command: ['redis-server', '--appendonly', 'yes']
+    ports:
+      - '127.0.0.1:56379:6379'
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: edu-crm-minio
+    restart: unless-stopped
+    # Only needed to exercise STORAGE_DRIVER=s3 locally. The local driver is the
+    # default and writes to .storage/.
+    command: ['server', '/data', '--console-address', ':9001']
+    environment:
+      MINIO_ROOT_USER: edu_minio
+      MINIO_ROOT_PASSWORD: edu_minio_password
+    ports:
+      - '127.0.0.1:59000:9000'
+      - '127.0.0.1:59001:9001'
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  postgres-data:
+  redis-data:
+  minio-data:

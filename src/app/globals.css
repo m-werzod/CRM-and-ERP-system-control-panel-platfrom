@@ -1,0 +1,367 @@
+@import 'tailwindcss';
+
+/* ---------------------------------------------------------------------------
+   Design tokens
+   ---------------------------------------------------------------------------
+   An operations console, not a marketing site. The palette is deliberately
+   restrained: one cool neutral ramp carries the whole interface, a single accent
+   marks the primary action, and colour is otherwise reserved for STATUS. When
+   every panel is tinted, a red overdue badge stops meaning anything.
+
+   Density matters more than whitespace here. A receptionist checking a student
+   in, or an accountant reconciling forty payments, should see more rows per
+   screen than a consumer app would show — so the spacing scale is tighter than
+   Tailwind's defaults and the base font size is 13px rather than 16px.
+--------------------------------------------------------------------------- */
+
+@theme {
+  /* Neutrals: a slightly cool grey so the accent reads as deliberate. */
+  --color-canvas: oklch(98.4% 0.002 250);
+  --color-surface: oklch(100% 0 0);
+  --color-surface-raised: oklch(100% 0 0);
+  --color-surface-sunken: oklch(96.8% 0.003 250);
+  --color-surface-hover: oklch(97.2% 0.004 250);
+
+  --color-border: oklch(91.5% 0.005 250);
+  --color-border-strong: oklch(85% 0.008 250);
+  --color-border-focus: oklch(58% 0.16 265);
+
+  --color-text: oklch(24% 0.012 255);
+  --color-text-muted: oklch(50% 0.012 255);
+  --color-text-subtle: oklch(63% 0.01 255);
+  --color-text-inverse: oklch(99% 0 0);
+
+  /* Accent: indigo. Used for the primary action and active navigation only. */
+  --color-accent: oklch(52% 0.18 267);
+  --color-accent-hover: oklch(46% 0.18 267);
+  --color-accent-subtle: oklch(96% 0.02 267);
+  --color-accent-border: oklch(88% 0.05 267);
+  --color-accent-text: oklch(44% 0.17 267);
+
+  /* Status. Each has a solid tone for text/icons and a wash for backgrounds. */
+  --color-success: oklch(58% 0.14 150);
+  --color-success-subtle: oklch(96% 0.03 150);
+  --color-success-border: oklch(87% 0.06 150);
+  --color-success-text: oklch(45% 0.13 150);
+
+  --color-warning: oklch(72% 0.15 75);
+  --color-warning-subtle: oklch(97% 0.04 85);
+  --color-warning-border: oklch(88% 0.08 80);
+  --color-warning-text: oklch(50% 0.12 70);
+
+  --color-danger: oklch(58% 0.2 25);
+  --color-danger-subtle: oklch(96.5% 0.02 25);
+  --color-danger-border: oklch(88% 0.06 25);
+  --color-danger-text: oklch(48% 0.19 25);
+
+  --color-info: oklch(60% 0.13 240);
+  --color-info-subtle: oklch(96.5% 0.025 240);
+  --color-info-border: oklch(88% 0.05 240);
+  --color-info-text: oklch(46% 0.13 240);
+
+  /* Attendance statuses get their own reserved hues so the same colour always
+     means the same thing across the register, the reports and the charts. */
+  --color-present: oklch(58% 0.14 150);
+  --color-absent: oklch(58% 0.2 25);
+  --color-late: oklch(72% 0.15 75);
+  --color-excused: oklch(60% 0.09 265);
+
+  /* Chart series: distinguishable in order, and at 3px, and for the most common
+     forms of colour blindness (no adjacent red/green pair). */
+  --color-chart-1: oklch(52% 0.18 267);
+  --color-chart-2: oklch(64% 0.14 195);
+  --color-chart-3: oklch(70% 0.15 85);
+  --color-chart-4: oklch(58% 0.17 340);
+  --color-chart-5: oklch(62% 0.13 150);
+  --color-chart-6: oklch(55% 0.1 300);
+
+  /* Type: system stack. A webfont would block first paint on the 3G connections
+     some branches actually have. */
+  --font-sans:
+    ui-sans-serif, system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', Arial,
+    'Noto Sans', sans-serif, 'Apple Color Emoji', 'Segoe UI Emoji';
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', Menlo, Consolas, monospace;
+
+  --text-2xs: 0.6875rem; /* 11px — table meta, badges */
+  --text-xs: 0.75rem; /* 12px — secondary */
+  --text-sm: 0.8125rem; /* 13px — BASE for this app */
+  --text-base: 0.875rem; /* 14px — emphasised body */
+  --text-lg: 1rem;
+  --text-xl: 1.125rem;
+  --text-2xl: 1.375rem;
+  --text-3xl: 1.75rem;
+
+  --radius-sm: 0.25rem;
+  --radius-md: 0.375rem;
+  --radius-lg: 0.5rem;
+  --radius-xl: 0.75rem;
+
+  /* Shadows are low-contrast: elevation here is for layering, not decoration. */
+  --shadow-xs: 0 1px 2px 0 oklch(24% 0.012 255 / 0.05);
+  --shadow-sm: 0 1px 3px 0 oklch(24% 0.012 255 / 0.08), 0 1px 2px -1px oklch(24% 0.012 255 / 0.06);
+  --shadow-md: 0 4px 10px -2px oklch(24% 0.012 255 / 0.1), 0 2px 4px -2px oklch(24% 0.012 255 / 0.06);
+  --shadow-lg: 0 12px 28px -8px oklch(24% 0.012 255 / 0.16), 0 4px 10px -4px oklch(24% 0.012 255 / 0.08);
+
+  --sidebar-width: 15rem;
+  --sidebar-width-collapsed: 3.25rem;
+  --topbar-height: 3.25rem;
+}
+
+/* Dark theme. Toggled by `data-theme="dark"` on <html>, or followed from the OS
+   when no explicit choice is stored. Every token is redefined — never a colour
+   whose only definition lives in a media query. */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+:root[data-theme='dark'] {
+  --color-canvas: oklch(19% 0.01 258);
+  --color-surface: oklch(23% 0.012 258);
+  --color-surface-raised: oklch(26% 0.013 258);
+  --color-surface-sunken: oklch(17% 0.01 258);
+  --color-surface-hover: oklch(28% 0.014 258);
+
+  --color-border: oklch(31% 0.012 258);
+  --color-border-strong: oklch(40% 0.014 258);
+
+  --color-text: oklch(95% 0.004 258);
+  --color-text-muted: oklch(72% 0.01 258);
+  --color-text-subtle: oklch(58% 0.012 258);
+  --color-text-inverse: oklch(19% 0.01 258);
+
+  --color-accent: oklch(66% 0.16 267);
+  --color-accent-hover: oklch(72% 0.16 267);
+  --color-accent-subtle: oklch(29% 0.05 267);
+  --color-accent-border: oklch(38% 0.08 267);
+  --color-accent-text: oklch(80% 0.1 267);
+
+  --color-success-subtle: oklch(27% 0.05 150);
+  --color-success-border: oklch(36% 0.07 150);
+  --color-success-text: oklch(80% 0.11 150);
+
+  --color-warning-subtle: oklch(28% 0.06 80);
+  --color-warning-border: oklch(38% 0.08 80);
+  --color-warning-text: oklch(84% 0.12 85);
+
+  --color-danger-subtle: oklch(27% 0.07 25);
+  --color-danger-border: oklch(37% 0.1 25);
+  --color-danger-text: oklch(80% 0.13 25);
+
+  --color-info-subtle: oklch(27% 0.05 240);
+  --color-info-border: oklch(36% 0.07 240);
+  --color-info-text: oklch(81% 0.1 240);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --color-canvas: oklch(19% 0.01 258);
+    --color-surface: oklch(23% 0.012 258);
+    --color-surface-raised: oklch(26% 0.013 258);
+    --color-surface-sunken: oklch(17% 0.01 258);
+    --color-surface-hover: oklch(28% 0.014 258);
+
+    --color-border: oklch(31% 0.012 258);
+    --color-border-strong: oklch(40% 0.014 258);
+
+    --color-text: oklch(95% 0.004 258);
+    --color-text-muted: oklch(72% 0.01 258);
+    --color-text-subtle: oklch(58% 0.012 258);
+    --color-text-inverse: oklch(19% 0.01 258);
+
+    --color-accent: oklch(66% 0.16 267);
+    --color-accent-hover: oklch(72% 0.16 267);
+    --color-accent-subtle: oklch(29% 0.05 267);
+    --color-accent-border: oklch(38% 0.08 267);
+    --color-accent-text: oklch(80% 0.1 267);
+
+    --color-success-subtle: oklch(27% 0.05 150);
+    --color-success-border: oklch(36% 0.07 150);
+    --color-success-text: oklch(80% 0.11 150);
+
+    --color-warning-subtle: oklch(28% 0.06 80);
+    --color-warning-border: oklch(38% 0.08 80);
+    --color-warning-text: oklch(84% 0.12 85);
+
+    --color-danger-subtle: oklch(27% 0.07 25);
+    --color-danger-border: oklch(37% 0.1 25);
+    --color-danger-text: oklch(80% 0.13 25);
+
+    --color-info-subtle: oklch(27% 0.05 240);
+    --color-info-border: oklch(36% 0.07 240);
+    --color-info-text: oklch(81% 0.1 240);
+  }
+}
+
+/* --------------------------------------------------------------------------- */
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  html {
+    font-size: 16px;
+    -webkit-text-size-adjust: 100%;
+    /* Smooth scrolling is a liability in dense tables with keyboard navigation:
+       a focus jump animating across 40 rows reads as lag. */
+    scroll-behavior: auto;
+  }
+
+  body {
+    background-color: var(--color-canvas);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--text-sm);
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Money and counts must align vertically down a column; proportional digits
+     make a table of amounts impossible to scan. */
+  table,
+  [data-numeric] {
+    font-variant-numeric: tabular-nums;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-weight: 600;
+    letter-spacing: -0.011em;
+    color: var(--color-text);
+  }
+
+  /* A visible, high-contrast focus ring on keyboard focus only. Removing focus
+     outlines makes the app unusable without a mouse. */
+  :focus-visible {
+    outline: 2px solid var(--color-border-focus);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  ::selection {
+    background-color: var(--color-accent-subtle);
+    color: var(--color-accent-text);
+  }
+
+  /* Native form controls inherit the type scale so a 13px app does not sprout
+     16px inputs. */
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  [disabled],
+  [aria-disabled='true'] {
+    cursor: not-allowed;
+  }
+
+  /* Scrollbars: thin and unobtrusive, but never hidden — a hidden scrollbar in a
+     wide data table removes the only affordance that more columns exist. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-border-strong) transparent;
+  }
+
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background-color: var(--color-border-strong);
+    border-radius: 999px;
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+@layer utilities {
+  /* Visible only to assistive technology. Used for table captions, live-region
+     status messages and icon-button labels. */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border-width: 0;
+  }
+
+  /* Wide content (tables, timetables, charts) scrolls inside its own container.
+     The page body must never scroll horizontally. */
+  .scroll-x {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+  }
+
+  /* The shimmer used by every loading skeleton. */
+  .skeleton {
+    background: linear-gradient(
+      90deg,
+      var(--color-surface-sunken) 25%,
+      var(--color-surface-hover) 37%,
+      var(--color-surface-sunken) 63%
+    );
+    background-size: 400% 100%;
+    animation: skeleton-sweep 1.4s ease-in-out infinite;
+  }
+
+  @keyframes skeleton-sweep {
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0 50%;
+    }
+  }
+}
+
+/* Respect a reduced-motion preference everywhere. This app has little motion by
+   design, but skeletons and dialog transitions still animate. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+/* Print: used for invoices, receipts, registers and certificates. Chrome
+   defaults to dropping backgrounds, which would erase every status badge, so
+   print styles rely on borders and text instead. */
+@media print {
+  body {
+    background: white;
+    color: black;
+    font-size: 10pt;
+  }
+
+  [data-print-hide],
+  nav,
+  aside {
+    display: none !important;
+  }
+
+  .scroll-x {
+    overflow: visible !important;
+  }
+
+  a[href]::after {
+    content: '';
+  }
+}

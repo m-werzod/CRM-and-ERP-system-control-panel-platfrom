@@ -1,0 +1,157 @@
+// ---------------------------------------------------------------------------
+// Document management.
+//
+// Files are never served from a guessable public path. `storageKey` is an opaque
+// key inside the configured storage driver (local disk or S3-compatible), and
+// every read goes through an authorised route that checks `visibility` plus the
+// caller's permissions against the owning entity, then streams the bytes or
+// issues a short-lived signed URL. DocumentAccessLog records who looked at what.
+//
+// Ownership uses real nullable foreign keys rather than a polymorphic
+// (type, id) string pair, so a deleted student cannot leave orphaned documents
+// and cascade behaviour is declared rather than remembered.
+// ---------------------------------------------------------------------------
+
+enum DocumentOwnerType {
+  STUDENT
+  GUARDIAN
+  EMPLOYEE
+  APPLICATION
+  INVOICE
+  LEAD
+  GROUP
+  HOMEWORK
+  HOMEWORK_SUBMISSION
+  CERTIFICATE
+  LEAVE_REQUEST
+  BIOMETRIC_CONSENT
+  ANNOUNCEMENT
+  ORGANIZATION
+}
+
+enum DocumentCategory {
+  CONTRACT
+  IDENTIFICATION
+  DIPLOMA
+  CERTIFICATE
+  PHOTO
+  MEDICAL
+  INVOICE_COPY
+  RECEIPT
+  PAYSLIP
+  CV
+  REPORT
+  CONSENT_FORM
+  HOMEWORK_ATTACHMENT
+  IMPORT_SOURCE
+  OTHER
+}
+
+enum DocumentVisibility {
+  /// Uploader plus users holding documents.view.all.
+  PRIVATE
+  /// Any staff member with documents.view in the owning branch.
+  STAFF
+  /// The subject of the document and their guardians, plus staff.
+  OWNER
+  /// Deliberately shareable (e.g. a published syllabus).
+  INTERNAL_PUBLIC
+}
+
+model Document {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  /// Discriminator kept alongside the FKs purely so listings and filters do not
+  /// have to test eleven nullable columns.
+  ownerType DocumentOwnerType
+  category  DocumentCategory  @default(OTHER)
+
+  studentId            String?
+  student              Student?            @relation("StudentDocuments", fields: [studentId], references: [id], onDelete: Cascade)
+  guardianId           String?
+  guardian             Guardian?           @relation("GuardianDocuments", fields: [guardianId], references: [id], onDelete: Cascade)
+  employeeId           String?
+  employee             Employee?           @relation("EmployeeDocuments", fields: [employeeId], references: [id], onDelete: Cascade)
+  applicationId        String?
+  application          Application?        @relation("ApplicationDocuments", fields: [applicationId], references: [id], onDelete: Cascade)
+  invoiceId            String?
+  invoice              Invoice?            @relation("InvoiceDocuments", fields: [invoiceId], references: [id], onDelete: Cascade)
+  leadId               String?
+  lead                 Lead?               @relation("LeadDocuments", fields: [leadId], references: [id], onDelete: Cascade)
+  groupId              String?
+  group                Group?              @relation("GroupDocuments", fields: [groupId], references: [id], onDelete: Cascade)
+  homeworkId           String?
+  homework             Homework?           @relation("HomeworkDocuments", fields: [homeworkId], references: [id], onDelete: Cascade)
+  homeworkSubmissionId String?
+  homeworkSubmission   HomeworkSubmission? @relation("SubmissionDocuments", fields: [homeworkSubmissionId], references: [id], onDelete: Cascade)
+  certificateId        String?
+  certificate          Certificate?        @relation("CertificateDocuments", fields: [certificateId], references: [id], onDelete: Cascade)
+  leaveRequestId       String?
+  leaveRequest         LeaveRequest?       @relation("LeaveRequestDocuments", fields: [leaveRequestId], references: [id], onDelete: Cascade)
+  announcementId       String?
+  announcement         Announcement?       @relation("AnnouncementDocuments", fields: [announcementId], references: [id], onDelete: Cascade)
+
+  title         String
+  /// Original client filename, sanitised. Never used to build a storage path.
+  fileName      String
+  /// Opaque storage key. Unique so a retried upload cannot alias another file.
+  storageKey    String  @unique
+  storageDriver String  @default("local")
+  mimeType      String
+  sizeBytes     Int
+  /// SHA-256 of the contents, for de-duplication and integrity checks.
+  checksum      String?
+
+  visibility DocumentVisibility @default(STAFF)
+  expiresAt  DateTime?          @db.Timestamptz(3)
+  notes      String?
+
+  uploadedById String?
+  uploadedBy   User?   @relation("DocumentUploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  accessLogs        DocumentAccessLog[]
+  biometricConsents BiometricConsent[]  @relation("BiometricConsentDocument")
+
+  @@index([organizationId, ownerType, category])
+  @@index([organizationId, branchId, createdAt])
+  @@index([studentId])
+  @@index([employeeId])
+  @@index([applicationId])
+  @@index([invoiceId])
+  @@index([checksum])
+  @@map("documents")
+}
+
+enum DocumentAccessAction {
+  VIEW
+  DOWNLOAD
+  SIGNED_URL_ISSUED
+  DELETE
+}
+
+model DocumentAccessLog {
+  id         String   @id @default(cuid())
+  documentId String
+  document   Document @relation(fields: [documentId], references: [id], onDelete: Cascade)
+
+  userId String?
+  user   User?   @relation("DocumentAccessUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  action    DocumentAccessAction
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([documentId, createdAt])
+  @@index([userId, createdAt])
+  @@map("document_access_logs")
+}

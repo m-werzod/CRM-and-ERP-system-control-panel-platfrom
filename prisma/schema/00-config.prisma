@@ -1,0 +1,38 @@
+// ---------------------------------------------------------------------------
+// Prisma generator + datasource
+//
+// Conventions used across every schema file in this folder:
+//
+//  * Multi-tenancy      every tenant-scoped model carries `organizationId`.
+//                       Branch-scoped models additionally carry `branchId`.
+//  * Money              stored as `BigInt` minor units (tiyin / cents) in a
+//                       `*Minor` field, always paired with an ISO-4217
+//                       `currency` code. Never floats.
+//  * Percentages        stored as integer parts-per-million in a `*Ppm`
+//                       field (10% == 100_000 ppm). Exact, no rounding drift.
+//  * Timestamps         `createdAt` / `updatedAt` on every mutable model.
+//                       All instants are stored UTC (`timestamptz`).
+//  * Soft delete        `deletedAt DateTime?` on entities an operator can
+//                       "delete". Queries must filter it; see src/server/db.
+//  * History            assignment-style models (enrollments, teacher
+//                       assignments, fee plans, salary components) use
+//                       `startDate`/`endDate` rows instead of mutation.
+//  * Derived caches     fields marked "derived cache" are recomputed inside
+//                       the same transaction that writes their source rows
+//                       and are never writable from a request payload.
+// ---------------------------------------------------------------------------
+
+generator client {
+  provider     = "prisma-client"
+  output       = "../../src/generated/prisma"
+  // Emit ESM-compatible output that Next's bundler and tsx both understand.
+  moduleFormat = "esm"
+  runtime      = "nodejs"
+}
+
+// Prisma 7 takes the connection URL from prisma.config.ts (for the CLI) and
+// from a driver adapter passed to `new PrismaClient({ adapter })` (at runtime).
+// See src/server/db/client.ts.
+datasource db {
+  provider = "postgresql"
+}

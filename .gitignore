@@ -1,0 +1,43 @@
+node_modules
+.next
+out
+dist
+build
+coverage
+.turbo
+
+# env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# local dev database (embedded postgres cluster + downloaded binaries)
+.dev-db/
+.embedded-postgres/
+
+# local object storage driver
+.storage/
+
+# test artifacts
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# editor / OS
+.DS_Store
+Thumbs.db
+*.log
+.idea/
+.vscode/*
+!.vscode/extensions.json
+
+# prisma client, emitted by `prisma generate` (which `npm run build` runs first).
+# Committing it would put a build artifact under review and conflict on every
+# schema change.
+src/generated/
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts

@@ -1,0 +1,313 @@
+// ---------------------------------------------------------------------------
+// People: students, guardians, employees, teachers.
+//
+// A person appears exactly once. A staff member is one `User` + one `Employee`;
+// a teacher is that `Employee` plus a `Teacher` profile. A student is a
+// `Student` row that may optionally be linked to a `User` for portal access.
+// Lead -> Application -> Student keeps provenance via nullable back-pointers
+// instead of duplicating the person.
+// ---------------------------------------------------------------------------
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+  UNSPECIFIED
+}
+
+enum StudentStatus {
+  PROSPECT
+  ACTIVE
+  ON_HOLD
+  GRADUATED
+  WITHDRAWN
+  SUSPENDED
+}
+
+model Student {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  /// Human-facing identifier printed on contracts and receipts.
+  studentCode String
+
+  /// Optional portal login. Absent for students who never sign in.
+  userId String? @unique
+  user   User?   @relation("StudentUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  firstName   String
+  lastName    String
+  middleName  String?
+  dateOfBirth DateTime? @db.Date
+  gender      Gender    @default(UNSPECIFIED)
+
+  phone           String?
+  /// E.164-normalised copy of `phone`, indexed for search + duplicate checks.
+  phoneNormalized String?
+  email           String?
+  addressLine     String?
+  city            String?
+  postalCode      String?
+  photoUrl        String?
+  /// Only the last digits of a government ID are retained; the full value
+  /// belongs in a permissioned Document, never in a queryable column.
+  nationalIdLast4 String? @db.VarChar(8)
+
+  status           StudentStatus @default(PROSPECT)
+  enrolledAt       DateTime?     @db.Timestamptz(3)
+  graduatedAt      DateTime?     @db.Timestamptz(3)
+  withdrawnAt      DateTime?     @db.Timestamptz(3)
+  withdrawalReason String?
+  notes            String?
+
+  emergencyContactName     String?
+  emergencyContactPhone    String?
+  emergencyContactRelation String?
+
+  /// CRM / admissions provenance. Populated by the conversion use-cases.
+  leadId        String?      @unique
+  lead          Lead?        @relation("LeadConvertedStudent", fields: [leadId], references: [id], onDelete: SetNull)
+  applicationId String?      @unique
+  application   Application? @relation("ApplicationStudent", fields: [applicationId], references: [id], onDelete: SetNull)
+
+  createdById String?
+  createdBy   User?   @relation("StudentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  guardians            StudentGuardian[]
+  enrollments          Enrollment[]
+  attendanceRecords    AttendanceRecord[]
+  studentFeePlans      StudentFeePlan[]
+  invoices             Invoice[]
+  payments             Payment[]
+  studentDiscounts     StudentDiscount[]
+  credits              StudentCredit[]
+  ledgerEntries        LedgerEntry[]
+  financialAdjustments FinancialAdjustment[]
+  paymentSchedules     PaymentSchedule[]
+  homeworkSubmissions  HomeworkSubmission[]
+  examResults          ExamResult[]
+  grades               Grade[]
+  certificates         Certificate[]
+  biometricEnrollments BiometricEnrollment[]
+  faceMatches          FaceRecognitionEvent[] @relation("FaceMatchedStudent")
+  qrTokenUses          QrToken[]              @relation("QrTokenUsedByStudent")
+  followUpTasks        FollowUpTask[]
+  notifications        Notification[]         @relation("NotificationStudentRecipient")
+  documents            Document[]             @relation("StudentDocuments")
+
+  @@unique([organizationId, studentCode])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, lastName, firstName])
+  @@index([organizationId, phoneNormalized])
+  @@index([organizationId, status, deletedAt])
+  @@map("students")
+}
+
+enum GuardianRelationship {
+  MOTHER
+  FATHER
+  STEPMOTHER
+  STEPFATHER
+  GRANDPARENT
+  SIBLING
+  LEGAL_GUARDIAN
+  OTHER
+}
+
+model Guardian {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Optional portal login for the future parent portal.
+  userId String? @unique
+  user   User?   @relation("GuardianUser", fields: [userId], references: [id], onDelete: SetNull)
+
+  firstName       String
+  lastName        String
+  phone           String
+  phoneNormalized String?
+  altPhone        String?
+  email           String?
+  occupation      String?
+  employer        String?
+  addressLine     String?
+  city            String?
+  preferredLocale Locale?
+  notes           String?
+
+  createdById String?
+  createdBy   User?   @relation("GuardianCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  students                StudentGuardian[]
+  notificationPreferences NotificationPreference[]
+  notifications           Notification[]           @relation("NotificationGuardianRecipient")
+  biometricConsents       BiometricConsent[]       @relation("BiometricConsentGuardian")
+  documents               Document[]               @relation("GuardianDocuments")
+
+  @@index([organizationId, phoneNormalized])
+  @@index([organizationId, lastName, firstName])
+  @@map("guardians")
+}
+
+/// Many-to-many with attributes: a student may have several guardians and a
+/// guardian may cover several students.
+model StudentGuardian {
+  id         String   @id @default(cuid())
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  guardianId String
+  guardian   Guardian @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+
+  relationship          GuardianRelationship @default(OTHER)
+  isPrimary             Boolean              @default(false)
+  isEmergencyContact    Boolean              @default(false)
+  canPickUp             Boolean              @default(true)
+  receivesInvoices      Boolean              @default(true)
+  receivesNotifications Boolean              @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([studentId, guardianId])
+  @@index([guardianId])
+  @@map("student_guardians")
+}
+
+enum EmploymentType {
+  FULL_TIME
+  PART_TIME
+  CONTRACT
+  HOURLY
+  INTERN
+}
+
+enum EmploymentStatus {
+  ACTIVE
+  PROBATION
+  ON_LEAVE
+  SUSPENDED
+  TERMINATED
+  RESIGNED
+}
+
+enum SalaryPeriod {
+  MONTHLY
+  HOURLY
+  PER_LESSON
+}
+
+/// Every staff member -- admin, accountant, receptionist, sales agent and
+/// teacher alike -- is an Employee. This keeps HR, payroll and employee
+/// attendance uniform across roles.
+model Employee {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  userId String @unique
+  user   User   @relation("EmployeeUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  employeeCode String
+  position     String
+  departmentId String?
+  department   Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
+
+  employmentType    EmploymentType   @default(FULL_TIME)
+  status            EmploymentStatus @default(ACTIVE)
+  hireDate          DateTime         @db.Date
+  probationEndDate  DateTime?        @db.Date
+  terminationDate   DateTime?        @db.Date
+  terminationReason String?
+
+  /// Contracted base pay. Payroll reads effective SalaryComponent rows; this
+  /// is the headline figure shown on the HR profile.
+  baseSalaryMinor  BigInt?
+  salaryCurrency   String?      @db.VarChar(3)
+  salaryPeriod     SalaryPeriod @default(MONTHLY)
+  /// Only the tail of a bank account is stored for reconciliation display.
+  bankAccountLast4 String?      @db.VarChar(8)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  teacher              Teacher?
+  attendances          EmployeeAttendance[]
+  leaveRequests        LeaveRequest[]
+  salaryComponents     SalaryComponent[]
+  payrollItems         PayrollItem[]
+  biometricEnrollments BiometricEnrollment[]
+  documents            Document[]            @relation("EmployeeDocuments")
+
+  @@unique([organizationId, employeeCode])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, departmentId])
+  @@map("employees")
+}
+
+model Teacher {
+  id         String   @id @default(cuid())
+  employeeId String   @unique
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  specialization  String?
+  qualification   String?
+  bio             String?
+  /// Workload ceiling used by the scheduling conflict checks and the HR
+  /// workload report.
+  maxWeeklyHours  Int     @default(30)
+  hourlyRateMinor BigInt?
+  rateCurrency    String? @db.VarChar(3)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  subjects         TeacherSubject[]
+  groupAssignments GroupTeacher[]
+  primaryGroups    Group[]          @relation("GroupPrimaryTeacher")
+  assistantGroups  Group[]          @relation("GroupAssistantTeacher")
+  scheduleSlots    ScheduleSlot[]
+  lessons          Lesson[]
+  homework         Homework[]
+  exams            Exam[]
+  trialLessons     TrialLesson[]
+
+  @@map("teachers")
+}
+
+enum SubjectProficiency {
+  PRIMARY
+  SECONDARY
+  SUBSTITUTE
+}
+
+model TeacherSubject {
+  id        String  @id @default(cuid())
+  teacherId String
+  teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  subjectId String
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  proficiency SubjectProficiency @default(PRIMARY)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([teacherId, subjectId])
+  @@index([subjectId])
+  @@map("teacher_subjects")
+}

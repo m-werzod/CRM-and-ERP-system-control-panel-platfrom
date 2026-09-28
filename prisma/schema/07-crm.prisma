@@ -1,0 +1,267 @@
+// ---------------------------------------------------------------------------
+// CRM: lead pipeline, activity timeline, follow-up tasks, trial lessons.
+//
+// A converted lead is NOT deleted or copied away. Student.leadId points back at
+// it and the lead keeps its whole LeadActivity / LeadStatusHistory trail, so
+// "where did this student come from and who worked the deal" stays answerable
+// years later. Duplicate detection uses phoneNormalized + emailNormalized.
+// ---------------------------------------------------------------------------
+
+enum LeadStatus {
+  NEW
+  CONTACTED
+  QUALIFIED
+  TRIAL_BOOKED
+  TRIAL_COMPLETED
+  APPLICATION
+  ENROLLED
+  LOST
+  CLOSED
+}
+
+enum LeadSource {
+  WALK_IN
+  PHONE_CALL
+  WEBSITE
+  INSTAGRAM
+  TELEGRAM
+  FACEBOOK
+  GOOGLE_ADS
+  REFERRAL
+  EVENT
+  PARTNER
+  OTHER
+}
+
+enum LeadPriority {
+  LOW
+  MEDIUM
+  HIGH
+  URGENT
+}
+
+model Lead {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  firstName       String
+  lastName        String?
+  phone           String
+  /// E.164-normalised phone, indexed: powers search and duplicate detection.
+  phoneNormalized String
+  email           String?
+  emailNormalized String?
+
+  source       LeadSource   @default(OTHER)
+  sourceDetail String?
+  status       LeadStatus   @default(NEW)
+  priority     LeadPriority @default(MEDIUM)
+  /// 0-100 qualification score maintained by sales.
+  score        Int?
+
+  interestedProgramId String?
+  interestedProgram   Program? @relation(fields: [interestedProgramId], references: [id], onDelete: SetNull)
+
+  assignedToUserId String?
+  assignedToUser   User?     @relation("LeadAssignedTo", fields: [assignedToUserId], references: [id], onDelete: SetNull)
+  assignedAt       DateTime? @db.Timestamptz(3)
+
+  /// Expected deal size, used for pipeline value reporting.
+  expectedValueMinor BigInt?
+  currency           String? @db.VarChar(3)
+
+  notes           String?
+  nextFollowUpAt  DateTime? @db.Timestamptz(3)
+  lastContactedAt DateTime? @db.Timestamptz(3)
+  lostReason      String?
+  lostAt          DateTime? @db.Timestamptz(3)
+
+  /// Set by ConvertLeadToStudent. The reverse side lives on Student.leadId.
+  convertedStudent Student?  @relation("LeadConvertedStudent")
+  convertedAt      DateTime? @db.Timestamptz(3)
+
+  /// Populated when duplicate detection merges this lead into another.
+  duplicateOfLeadId String?
+  duplicateOfLead   Lead?   @relation("LeadDuplicate", fields: [duplicateOfLeadId], references: [id], onDelete: SetNull)
+  duplicates        Lead[]  @relation("LeadDuplicate")
+
+  createdById String?
+  createdBy   User?   @relation("LeadCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  activities    LeadActivity[]
+  statusHistory LeadStatusHistory[]
+  followUpTasks FollowUpTask[]
+  trialLessons  TrialLesson[]
+  applications  Application[]
+  documents     Document[]          @relation("LeadDocuments")
+
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, phoneNormalized])
+  @@index([organizationId, emailNormalized])
+  @@index([organizationId, assignedToUserId, status])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, nextFollowUpAt])
+  @@index([organizationId, source, createdAt])
+  @@map("leads")
+}
+
+enum LeadActivityType {
+  NOTE
+  CALL
+  EMAIL
+  SMS
+  TELEGRAM
+  MEETING
+  TRIAL_BOOKED
+  TRIAL_ATTENDED
+  STATUS_CHANGE
+  ASSIGNMENT
+  FOLLOW_UP_CREATED
+  FOLLOW_UP_COMPLETED
+  APPLICATION_CREATED
+  CONVERTED
+  DOCUMENT_ATTACHED
+}
+
+enum CallOutcome {
+  ANSWERED
+  NO_ANSWER
+  BUSY
+  WRONG_NUMBER
+  CALLBACK_REQUESTED
+  NOT_INTERESTED
+}
+
+model LeadActivity {
+  id     String @id @default(cuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  type            LeadActivityType
+  subject         String?
+  body            String?
+  outcome         CallOutcome?
+  durationSeconds Int?
+  occurredAt      DateTime         @default(now()) @db.Timestamptz(3)
+
+  createdById String?
+  createdBy   User?   @relation("LeadActivityCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  metadata Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([leadId, occurredAt])
+  @@index([createdById, occurredAt])
+  @@map("lead_activities")
+}
+
+model LeadStatusHistory {
+  id     String @id @default(cuid())
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  fromStatus LeadStatus?
+  toStatus   LeadStatus
+  reason     String?
+
+  changedById String?
+  changedBy   User?    @relation("LeadStatusChangedBy", fields: [changedById], references: [id], onDelete: SetNull)
+  changedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([leadId, changedAt])
+  @@map("lead_status_history")
+}
+
+enum FollowUpStatus {
+  OPEN
+  COMPLETED
+  CANCELLED
+}
+
+/// Tasks are used by sales (lead follow-up) and by student services (retention
+/// calls, debt chasing), hence both optional subject links.
+model FollowUpTask {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  leadId    String?
+  lead      Lead?    @relation(fields: [leadId], references: [id], onDelete: Cascade)
+  studentId String?
+  student   Student? @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  title       String
+  description String?
+  dueAt       DateTime       @db.Timestamptz(3)
+  priority    LeadPriority   @default(MEDIUM)
+  status      FollowUpStatus @default(OPEN)
+
+  assignedToUserId String
+  assignedToUser   User   @relation("FollowUpAssignedTo", fields: [assignedToUserId], references: [id], onDelete: Restrict)
+
+  completedAt    DateTime? @db.Timestamptz(3)
+  completedById  String?
+  completedBy    User?     @relation("FollowUpCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
+  completionNote String?
+
+  createdById String?
+  createdBy   User?   @relation("FollowUpCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([organizationId, assignedToUserId, status, dueAt])
+  @@index([organizationId, status, dueAt])
+  @@index([leadId])
+  @@index([studentId])
+  @@map("follow_up_tasks")
+}
+
+enum TrialLessonStatus {
+  SCHEDULED
+  ATTENDED
+  NO_SHOW
+  CANCELLED
+}
+
+model TrialLesson {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  leadId String
+  lead   Lead   @relation(fields: [leadId], references: [id], onDelete: Cascade)
+
+  groupId   String?
+  group     Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  lessonId  String?
+  lesson    Lesson?  @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+  teacherId String?
+  teacher   Teacher? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+
+  scheduledAt      DateTime          @db.Timestamptz(3)
+  status           TrialLessonStatus @default(SCHEDULED)
+  feedback         String?
+  /// Teacher's placement recommendation coming out of the trial.
+  recommendedLevel ProgramLevel?
+
+  createdById String?
+  createdBy   User?   @relation("TrialLessonCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([organizationId, status, scheduledAt])
+  @@index([leadId])
+  @@map("trial_lessons")
+}

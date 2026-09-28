@@ -1,0 +1,292 @@
+// ---------------------------------------------------------------------------
+// Academic delivery & assessment: homework, exams, the gradebook, certificates.
+//
+// `Grade` is the unified gradebook row. It can originate from an exam result, a
+// homework submission, or a teacher's direct entry -- `sourceType` says which,
+// and the nullable source links let a grade be traced back to its evidence.
+// Scores are stored as the raw score plus the maximum in force at the time, so
+// recomputing a percentage never depends on today's exam configuration.
+// ---------------------------------------------------------------------------
+
+enum HomeworkStatus {
+  DRAFT
+  PUBLISHED
+  CLOSED
+}
+
+model Homework {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  groupId  String
+  group    Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  lessonId String?
+  lesson   Lesson? @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+
+  teacherId String?
+  teacher   Teacher? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+
+  title       String
+  description String?
+  dueAt       DateTime       @db.Timestamptz(3)
+  maxScore    Int?
+  status      HomeworkStatus @default(DRAFT)
+  publishedAt DateTime?      @db.Timestamptz(3)
+
+  createdById String?
+  createdBy   User?   @relation("HomeworkCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  submissions HomeworkSubmission[]
+  documents   Document[]           @relation("HomeworkDocuments")
+
+  @@index([organizationId, groupId, dueAt])
+  @@index([organizationId, branchId, status])
+  @@index([teacherId, dueAt])
+  @@map("homework")
+}
+
+enum SubmissionStatus {
+  NOT_SUBMITTED
+  SUBMITTED
+  LATE
+  GRADED
+  RESUBMIT_REQUESTED
+  EXCUSED
+}
+
+model HomeworkSubmission {
+  id         String   @id @default(cuid())
+  homeworkId String
+  homework   Homework @relation(fields: [homeworkId], references: [id], onDelete: Cascade)
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  status      SubmissionStatus @default(NOT_SUBMITTED)
+  submittedAt DateTime?        @db.Timestamptz(3)
+  content     String?
+
+  score    Int?
+  /// Max score in force when this was graded; kept so the percentage is stable.
+  maxScore Int?
+  feedback String?
+
+  gradedById String?
+  gradedBy   User?     @relation("HomeworkGradedBy", fields: [gradedById], references: [id], onDelete: SetNull)
+  gradedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  documents Document[] @relation("SubmissionDocuments")
+  grades    Grade[]
+
+  @@unique([homeworkId, studentId])
+  @@index([studentId, status])
+  @@map("homework_submissions")
+}
+
+enum ExamType {
+  QUIZ
+  UNIT_TEST
+  MIDTERM
+  FINAL
+  PLACEMENT
+  MOCK
+  CERTIFICATION
+}
+
+enum ExamStatus {
+  DRAFT
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  GRADED
+  PUBLISHED
+  CANCELLED
+}
+
+model Exam {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  groupId   String?
+  group     Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  programId String?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+  teacherId String?
+  teacher   Teacher? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  roomId    String?
+  room      Room?    @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  termId    String?
+  term      Term?    @relation(fields: [termId], references: [id], onDelete: SetNull)
+
+  title           String
+  description     String?
+  type            ExamType   @default(QUIZ)
+  scheduledAt     DateTime   @db.Timestamptz(3)
+  durationMinutes Int        @default(60)
+  maxScore        Int
+  passingScore    Int
+  /// Weight of this exam inside the term grade, in parts-per-million.
+  weightPpm       Int        @default(0)
+  status          ExamStatus @default(DRAFT)
+
+  gradingScaleId String?
+  gradingScale   GradingScale? @relation(fields: [gradingScaleId], references: [id], onDelete: SetNull)
+
+  resultsPublishedAt DateTime? @db.Timestamptz(3)
+
+  createdById String?
+  createdBy   User?   @relation("ExamCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  results ExamResult[]
+  grades  Grade[]
+
+  @@index([organizationId, branchId, scheduledAt])
+  @@index([organizationId, groupId, scheduledAt])
+  @@index([organizationId, status, scheduledAt])
+  @@index([teacherId, scheduledAt])
+  @@map("exams")
+}
+
+model ExamResult {
+  id        String  @id @default(cuid())
+  examId    String
+  exam      Exam    @relation(fields: [examId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  score      Int?
+  /// Snapshot of Exam.maxScore at grading time.
+  maxScore   Int
+  gradeLabel String?
+  isPass     Boolean?
+  isAbsent   Boolean  @default(false)
+  remarks    String?
+
+  gradedById String?
+  gradedBy   User?     @relation("ExamGradedBy", fields: [gradedById], references: [id], onDelete: SetNull)
+  gradedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  grades Grade[]
+
+  @@unique([examId, studentId])
+  @@index([studentId, gradedAt])
+  @@index([examId, score])
+  @@map("exam_results")
+}
+
+enum GradeSourceType {
+  EXAM
+  HOMEWORK
+  MANUAL
+  PARTICIPATION
+  PROJECT
+  TERM_AVERAGE
+}
+
+/// Unified gradebook entry. Preserved indefinitely: a student's academic history
+/// is never rewritten when a group, program or grading scale changes.
+model Grade {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  groupId   String?
+  group     Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+  termId    String?
+  term      Term?    @relation(fields: [termId], references: [id], onDelete: SetNull)
+
+  sourceType           GradeSourceType
+  examId               String?
+  exam                 Exam?               @relation(fields: [examId], references: [id], onDelete: SetNull)
+  examResultId         String?
+  examResult           ExamResult?         @relation(fields: [examResultId], references: [id], onDelete: SetNull)
+  homeworkSubmissionId String?
+  homeworkSubmission   HomeworkSubmission? @relation(fields: [homeworkSubmissionId], references: [id], onDelete: SetNull)
+
+  score      Float
+  maxScore   Float
+  /// Weight inside the term aggregate, parts-per-million.
+  weightPpm  Int      @default(0)
+  gradeLabel String?
+  gpaPoints  Float?
+  isPass     Boolean?
+  comment    String?
+
+  gradedById String?
+  gradedBy   User?    @relation("GradeGradedBy", fields: [gradedById], references: [id], onDelete: SetNull)
+  gradedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([organizationId, studentId, gradedAt])
+  @@index([organizationId, groupId, subjectId])
+  @@index([studentId, termId])
+  @@index([examResultId])
+  @@map("grades")
+}
+
+enum CertificateStatus {
+  DRAFT
+  ISSUED
+  REVOKED
+}
+
+model Certificate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  programId String?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+
+  certificateNumber String
+  title             String
+  type              String
+  finalGradeLabel   String?
+  finalScore        Float?
+  status            CertificateStatus @default(DRAFT)
+
+  issuedAt   DateTime? @db.Timestamptz(3)
+  issuedById String?
+  issuedBy   User?     @relation("CertificateIssuedBy", fields: [issuedById], references: [id], onDelete: SetNull)
+
+  revokedAt    DateTime? @db.Timestamptz(3)
+  revokeReason String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  documents Document[] @relation("CertificateDocuments")
+
+  @@unique([organizationId, certificateNumber])
+  @@index([organizationId, studentId])
+  @@map("certificates")
+}

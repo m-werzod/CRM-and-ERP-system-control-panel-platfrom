@@ -1,0 +1,260 @@
+// ---------------------------------------------------------------------------
+// HR: employee attendance, leave, salary structure, payroll.
+//
+// Payroll is deliberately modular. `SalaryComponent` rows are dated, typed
+// building blocks (base, allowance, bonus, deduction, tax) and a PayrollRun
+// snapshots the computed result per employee into PayrollItem.breakdown. Adding
+// country-specific rules means adding a calculator in
+// src/server/services/hr/payroll/calculators -- not migrating this schema.
+// ---------------------------------------------------------------------------
+
+enum EmployeeAttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  ON_LEAVE
+  HOLIDAY
+  REMOTE
+  HALF_DAY
+}
+
+model EmployeeAttendance {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// Calendar date in the branch timezone.
+  workDate   DateTime  @db.Date
+  checkInAt  DateTime? @db.Timestamptz(3)
+  checkOutAt DateTime? @db.Timestamptz(3)
+
+  status          EmployeeAttendanceStatus @default(PRESENT)
+  minutesLate     Int                      @default(0)
+  overtimeMinutes Int                      @default(0)
+  workedMinutes   Int?
+
+  /// Same provider abstraction as student attendance.
+  method        AttendanceMethod  @default(MANUAL)
+  deviceId      String?
+  device        AttendanceDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  confidencePpm Int?
+
+  note String?
+
+  markedById   String?
+  markedBy     User?     @relation("EmployeeAttendanceMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  approvedById String?
+  approvedBy   User?     @relation("EmployeeAttendanceApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  /// One attendance row per employee per day.
+  @@unique([employeeId, workDate])
+  @@index([organizationId, branchId, workDate])
+  @@index([organizationId, workDate, status])
+  @@map("employee_attendances")
+}
+
+model LeaveType {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name             String
+  code             String
+  isPaid           Boolean @default(true)
+  maxDaysPerYear   Int?
+  requiresApproval Boolean @default(true)
+  requiresDocument Boolean @default(false)
+  isActive         Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  leaveRequests LeaveRequest[]
+
+  @@unique([organizationId, code])
+  @@map("leave_types")
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model LeaveRequest {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  employeeId  String
+  employee    Employee  @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+  leaveTypeId String
+  leaveType   LeaveType @relation(fields: [leaveTypeId], references: [id], onDelete: Restrict)
+
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  /// Working days, stored so historical requests keep the count that was
+  /// agreed even if the holiday calendar later changes.
+  days      Float
+  reason    String?
+
+  status LeaveRequestStatus @default(PENDING)
+
+  approvedById    String?
+  approvedBy      User?     @relation("LeaveApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt      DateTime? @db.Timestamptz(3)
+  rejectionReason String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  documents Document[] @relation("LeaveRequestDocuments")
+
+  @@index([organizationId, employeeId, status])
+  @@index([organizationId, status, startDate])
+  @@index([employeeId, startDate, endDate])
+  @@map("leave_requests")
+}
+
+enum SalaryComponentType {
+  BASE
+  ALLOWANCE
+  BONUS
+  DEDUCTION
+  TAX
+  SOCIAL_CONTRIBUTION
+}
+
+enum SalaryCalcType {
+  FIXED
+  PERCENT_OF_BASE
+  PER_HOUR
+  PER_LESSON
+}
+
+/// Dated salary building block. Changing pay closes the current row and opens a
+/// new one, so an old payroll run stays reproducible.
+model SalaryComponent {
+  id         String   @id @default(cuid())
+  employeeId String
+  employee   Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  type     SalaryComponentType
+  calcType SalaryCalcType      @default(FIXED)
+  name     String
+
+  amountMinor BigInt?
+  percentPpm  Int?
+  currency    String? @db.VarChar(3)
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+
+  createdById String?
+  createdBy   User?   @relation("SalaryComponentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([employeeId, effectiveFrom])
+  @@index([employeeId, effectiveTo])
+  @@map("salary_components")
+}
+
+enum PayrollRunStatus {
+  DRAFT
+  CALCULATED
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+model PayrollRun {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  periodStart DateTime         @db.Date
+  periodEnd   DateTime         @db.Date
+  status      PayrollRunStatus @default(DRAFT)
+  currency    String           @db.VarChar(3)
+
+  totalGrossMinor     BigInt @default(0)
+  totalDeductionMinor BigInt @default(0)
+  totalNetMinor       BigInt @default(0)
+
+  /// Name of the country/ruleset calculator used, recorded for reproducibility.
+  calculatorKey String?
+
+  calculatedById String?
+  calculatedBy   User?     @relation("PayrollCalculatedBy", fields: [calculatedById], references: [id], onDelete: SetNull)
+  calculatedAt   DateTime? @db.Timestamptz(3)
+  approvedById   String?
+  approvedBy     User?     @relation("PayrollApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt     DateTime? @db.Timestamptz(3)
+  paidAt         DateTime? @db.Timestamptz(3)
+
+  notes String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  items PayrollItem[]
+
+  @@unique([organizationId, branchId, periodStart, periodEnd])
+  @@index([organizationId, status, periodStart])
+  @@map("payroll_runs")
+}
+
+enum PayrollItemStatus {
+  PENDING
+  APPROVED
+  PAID
+  HELD
+}
+
+model PayrollItem {
+  id           String     @id @default(cuid())
+  payrollRunId String
+  payrollRun   PayrollRun @relation(fields: [payrollRunId], references: [id], onDelete: Cascade)
+  employeeId   String
+  employee     Employee   @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+
+  grossMinor     BigInt
+  deductionMinor BigInt
+  netMinor       BigInt
+  currency       String @db.VarChar(3)
+
+  hoursWorked   Float?
+  lessonsTaught Int?
+  daysPresent   Int?
+  daysAbsent    Int?
+  daysOnLeave   Int?
+
+  /// Line-by-line snapshot of the components that produced these totals.
+  /// Immutable once the run is APPROVED.
+  breakdown Json
+
+  status PayrollItemStatus @default(PENDING)
+  paidAt DateTime?         @db.Timestamptz(3)
+  note   String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([payrollRunId, employeeId])
+  @@index([employeeId, createdAt])
+  @@map("payroll_items")
+}

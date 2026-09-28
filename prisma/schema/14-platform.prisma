@@ -1,0 +1,500 @@
+// ---------------------------------------------------------------------------
+// Platform infrastructure: audit, activity timeline, job queue, cron, webhooks,
+// idempotency, rate limiting, import/export, saved reports, integrations.
+//
+// AuditLog vs ActivityEvent -- they are deliberately separate:
+//   AuditLog      compliance record. Who did what to which row, old value, new
+//                 value, reason, IP, request id. Append-only, retained, and
+//                 written for every sensitive action whether or not a human
+//                 would find it interesting.
+//   ActivityEvent operational timeline shown on a student / lead / invoice page.
+//                 Curated, human-readable, safe to show a receptionist.
+// ---------------------------------------------------------------------------
+
+enum AuditSeverity {
+  INFO
+  NOTICE
+  WARNING
+  CRITICAL
+}
+
+/// Append-only compliance trail. Never updated or deleted by application code.
+model AuditLog {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  branchId       String?
+  branch         Branch?       @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  actorUserId String?
+  actorUser   User?   @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  /// Denormalised actor label so a log line stays readable after the user row is
+  /// anonymised or removed.
+  actorLabel  String?
+  /// "system" for jobs/cron, "device" for terminal writes, "user" otherwise.
+  actorType   String  @default("user")
+
+  /// Dotted action key, e.g. "payment.refunded", "attendance.corrected".
+  action     String
+  entityType String
+  entityId   String?
+  summary    String?
+  /// { field: { from, to } } -- only the fields that actually changed.
+  changes    Json?
+  reason     String?
+  severity   AuditSeverity @default(INFO)
+
+  ipAddress String?
+  userAgent String?
+  /// Correlates every log line, notification and job produced by one request.
+  requestId String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, entityType, entityId])
+  @@index([organizationId, action, createdAt])
+  @@index([actorUserId, createdAt])
+  @@index([requestId])
+  @@index([organizationId, severity, createdAt])
+  @@map("audit_logs")
+}
+
+enum ActivitySubjectType {
+  STUDENT
+  LEAD
+  APPLICATION
+  EMPLOYEE
+  TEACHER
+  GROUP
+  INVOICE
+  GUARDIAN
+}
+
+/// Human-facing timeline entries ("Added to group Intermediate B",
+/// "Payment of 500 000 UZS received", "Parent contacted").
+model ActivityEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  subjectType ActivitySubjectType
+  subjectId   String
+
+  /// Dotted type key used to pick an icon and colour, e.g. "payment.received".
+  type        String
+  title       String
+  description String?
+
+  actorUserId String?
+  actorUser   User?   @relation("ActivityActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+  actorLabel  String?
+
+  occurredAt DateTime @default(now()) @db.Timestamptz(3)
+  metadata   Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([organizationId, subjectType, subjectId, occurredAt])
+  @@index([organizationId, occurredAt])
+  @@map("activity_events")
+}
+
+enum JobStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+  /// Exhausted maxAttempts; parked for manual inspection.
+  DEAD
+}
+
+/// Database-backed queue, the default driver behind the QueueProvider
+/// abstraction. Durable without extra infrastructure; a Redis/BullMQ driver
+/// implements the same interface when throughput demands it.
+model Job {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  queue   String @default("default")
+  /// Handler key registered in src/server/jobs/handlers.
+  name    String
+  payload Json
+
+  status   JobStatus @default(PENDING)
+  priority Int       @default(0)
+
+  attempts    Int @default(0)
+  maxAttempts Int @default(5)
+
+  /// Earliest execution time; also used for exponential backoff on retry.
+  runAt      DateTime  @default(now()) @db.Timestamptz(3)
+  startedAt  DateTime? @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+
+  /// Worker lease. A lock older than the visibility timeout is reclaimable, so a
+  /// crashed worker does not strand its jobs.
+  lockedBy String?
+  lockedAt DateTime? @db.Timestamptz(3)
+
+  error      String?
+  errorStack String?
+  result     Json?
+
+  /// Prevents the same logical job being enqueued twice.
+  idempotencyKey String? @unique
+  requestId      String?
+
+  createdById String?
+  createdBy   User?   @relation("JobCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  /// The claim query: pending work, ready to run, highest priority first.
+  @@index([status, runAt, priority])
+  @@index([queue, status, runAt])
+  @@index([organizationId, status, createdAt])
+  @@index([lockedAt])
+  @@map("jobs")
+}
+
+/// Declarative schedules for the recurring automations (overdue reminders,
+/// daily attendance summaries, follow-up nudges, exam reminders). Configurable
+/// per organisation rather than hard-coded in a platform cron file.
+model CronSchedule {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  key            String
+  description    String?
+  cronExpression String
+  timezone       String  @default("Asia/Tashkent")
+  isEnabled      Boolean @default(true)
+
+  /// Job handler to enqueue when the schedule fires.
+  jobName String
+  payload Json?
+
+  lastRunAt           DateTime? @db.Timestamptz(3)
+  lastStatus          String?
+  lastError           String?
+  nextRunAt           DateTime? @db.Timestamptz(3)
+  consecutiveFailures Int       @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([organizationId, key])
+  @@index([isEnabled, nextRunAt])
+  @@map("cron_schedules")
+}
+
+model WebhookEndpoint {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  provider    String
+  description String?
+  /// Outbound target. Inbound endpoints are routes; this row holds their config.
+  url         String?
+  /// Name of the env var / secret-store entry holding the signing secret.
+  /// The secret itself is never stored in the database.
+  secretRef   String?
+  events      String[]
+  isActive    Boolean  @default(true)
+
+  createdById String?
+  createdBy   User?   @relation("WebhookEndpointCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([organizationId, provider])
+  @@map("webhook_endpoints")
+}
+
+enum WebhookEventStatus {
+  RECEIVED
+  PROCESSED
+  FAILED
+  DUPLICATE
+  INVALID_SIGNATURE
+}
+
+/// Every inbound webhook is persisted before processing. `(provider, externalId)`
+/// is unique, which makes replay a no-op and processing idempotent.
+model WebhookEvent {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  provider   String
+  eventType  String?
+  /// Provider's own event id. Absent for providers that do not send one, in
+  /// which case a hash of the body is used.
+  externalId String
+
+  signatureValid Boolean            @default(false)
+  status         WebhookEventStatus @default(RECEIVED)
+  payload        Json
+  headers        Json?
+
+  processedAt DateTime? @db.Timestamptz(3)
+  attempts    Int       @default(0)
+  error       String?
+
+  receivedAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([provider, externalId])
+  @@index([provider, status, receivedAt])
+  @@map("webhook_events")
+}
+
+/// Request-level idempotency for money-moving endpoints. The first request
+/// stores its response; replays return it verbatim instead of re-executing.
+model IdempotencyKey {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Namespace, e.g. "payments.create" -- two endpoints may safely reuse a key.
+  scope String
+  key   String
+
+  /// Hash of the request body: a key replayed with different content is a
+  /// client bug and must be rejected, not silently answered from cache.
+  requestHash String
+
+  lockedAt       DateTime  @default(now()) @db.Timestamptz(3)
+  completedAt    DateTime? @db.Timestamptz(3)
+  responseStatus Int?
+  responseBody   Json?
+
+  expiresAt DateTime @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([scope, key])
+  @@index([expiresAt])
+  @@map("idempotency_keys")
+}
+
+/// Fixed-window counters backing the default rate limiter. The RateLimiter
+/// abstraction also has an in-memory driver for tests and a Redis driver for
+/// multi-instance deployments.
+model RateLimitCounter {
+  id          String   @id @default(cuid())
+  /// e.g. "login:203.0.113.4" or "lead.create:org_123".
+  key         String   @unique
+  windowStart DateTime @db.Timestamptz(3)
+  count       Int      @default(0)
+  expiresAt   DateTime @db.Timestamptz(3)
+
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([expiresAt])
+  @@map("rate_limit_counters")
+}
+
+enum ImportType {
+  STUDENTS
+  LEADS
+  GUARDIANS
+  EMPLOYEES
+  GROUPS
+  ATTENDANCE
+  PAYMENTS
+}
+
+enum ImportStatus {
+  PENDING
+  VALIDATING
+  /// Validation finished; awaiting the operator's go-ahead.
+  AWAITING_CONFIRMATION
+  IMPORTING
+  COMPLETED
+  COMPLETED_WITH_ERRORS
+  FAILED
+  CANCELLED
+}
+
+/// Two-phase CSV import: validate every row and report failures first, then
+/// commit. A file with bad rows never lands half-imported without a report.
+model ImportJob {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  type       ImportType
+  status     ImportStatus @default(PENDING)
+  fileName   String
+  storageKey String?
+
+  totalRows    Int @default(0)
+  validRows    Int @default(0)
+  failedRows   Int @default(0)
+  importedRows Int @default(0)
+
+  /// When false, valid rows are committed even though others failed.
+  allOrNothing Boolean @default(true)
+
+  createdById String?
+  createdBy   User?   @relation("ImportJobCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  startedAt  DateTime? @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+  error      String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  rowErrors ImportRowError[]
+
+  @@index([organizationId, type, createdAt])
+  @@index([organizationId, status])
+  @@map("import_jobs")
+}
+
+model ImportRowError {
+  id          String    @id @default(cuid())
+  importJobId String
+  importJob   ImportJob @relation(fields: [importJobId], references: [id], onDelete: Cascade)
+
+  rowNumber Int
+  field     String?
+  code      String?
+  message   String
+  /// The offending row, so the operator can fix and re-upload just that line.
+  rawRow    Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([importJobId, rowNumber])
+  @@map("import_row_errors")
+}
+
+enum ExportFormat {
+  CSV
+  XLSX
+  PDF
+  JSON
+}
+
+enum ExportStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+model ExportJob {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Report key, e.g. "finance.revenue", "attendance.byGroup".
+  type    String
+  format  ExportFormat @default(CSV)
+  /// The exact filter set used, so an export is reproducible.
+  filters Json
+  status  ExportStatus @default(PENDING)
+
+  storageKey String?
+  rowCount   Int?
+  error      String?
+  /// Generated files are not kept forever.
+  expiresAt  DateTime? @db.Timestamptz(3)
+
+  createdById String?
+  createdBy   User?   @relation("ExportJobCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  startedAt  DateTime? @db.Timestamptz(3)
+  finishedAt DateTime? @db.Timestamptz(3)
+  createdAt  DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([organizationId, createdAt])
+  @@index([createdById, createdAt])
+  @@map("export_jobs")
+}
+
+model SavedReport {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String
+  description String?
+  type        String
+  filters     Json
+  isShared    Boolean @default(false)
+
+  createdById String?
+  createdBy   User?   @relation("SavedReportCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([organizationId, type])
+  @@index([createdById])
+  @@map("saved_reports")
+}
+
+enum IntegrationKind {
+  FACE_RECOGNITION
+  EMAIL
+  SMS
+  TELEGRAM
+  WHATSAPP
+  PAYMENT_GATEWAY
+  STORAGE
+  QUEUE
+}
+
+enum IntegrationStatus {
+  NOT_CONFIGURED
+  CONFIGURED
+  HEALTHY
+  DEGRADED
+  ERROR
+  DISABLED
+}
+
+/// Which provider implementation backs each integration point, and whether it
+/// is actually configured. The UI reads `status` to show an honest
+/// "not configured" state instead of pretending a feature works.
+///
+/// `config` holds non-secret settings only. Credentials live in environment
+/// variables / the secret store and are referenced by name in `secretRefs`.
+model IntegrationConfig {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  kind      IntegrationKind
+  provider  String
+  isEnabled Boolean           @default(false)
+  status    IntegrationStatus @default(NOT_CONFIGURED)
+
+  config     Json?
+  secretRefs Json?
+
+  lastCheckedAt DateTime? @db.Timestamptz(3)
+  lastError     String?
+
+  updatedById String?
+  updatedBy   User?   @relation("IntegrationConfigUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([organizationId, kind])
+  @@index([organizationId, status])
+  @@map("integration_configs")
+}

@@ -1,0 +1,328 @@
+// ---------------------------------------------------------------------------
+// Attendance subsystem.
+//
+// One AttendanceRecord per (lesson, student) -- enforced by a unique index, so
+// duplicate submission is a database-level impossibility rather than a
+// best-effort check. `method` records HOW the record came to exist; every
+// provider (manual, teacher, face, QR, device, import) writes the same row
+// shape through the same MarkAttendance use-case.
+//
+// Biometrics: this schema deliberately stores NO raw biometric data. A
+// BiometricEnrollment holds only an opaque provider-side reference plus a
+// consent link. Templates and embeddings live with the recognition provider;
+// if that provider is the in-repo mock, its store is separate and clearly
+// labelled as non-production. Deleting an enrollment must call the provider's
+// deleteEnrollment so the reference does not outlive the record.
+// ---------------------------------------------------------------------------
+
+enum AttendanceStatus {
+  PRESENT
+  ABSENT
+  LATE
+  EXCUSED
+}
+
+enum AttendanceMethod {
+  /// Marked by an administrator on the student's behalf.
+  MANUAL
+  /// Submitted by the teacher from the class roster.
+  TEACHER
+  FACE_RECOGNITION
+  QR
+  DEVICE
+  /// Created by a bulk CSV import.
+  IMPORT
+  /// Written by a scheduled job (e.g. auto-absent after the grace window).
+  SYSTEM
+}
+
+model AttendanceRecord {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  lessonId  String
+  lesson    Lesson  @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  /// The enrollment the student held when this lesson ran. Keeping it pins
+  /// history to the right group even after a transfer.
+  enrollmentId String?
+  enrollment   Enrollment? @relation(fields: [enrollmentId], references: [id], onDelete: SetNull)
+
+  status      AttendanceStatus
+  method      AttendanceMethod @default(TEACHER)
+  minutesLate Int?
+  note        String?
+
+  /// Recognition confidence in parts-per-million (0.98 == 980_000). Only set
+  /// for FACE_RECOGNITION / DEVICE methods.
+  confidencePpm Int?
+  deviceId      String?
+  device        AttendanceDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+
+  markedById String?
+  markedBy   User?    @relation("AttendanceMarkedBy", fields: [markedById], references: [id], onDelete: SetNull)
+  markedAt   DateTime @default(now()) @db.Timestamptz(3)
+
+  /// Set once any AttendanceCorrection has been applied, so lists can flag
+  /// amended records without a join.
+  isCorrected Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  corrections           AttendanceCorrection[]
+  faceRecognitionEvents FaceRecognitionEvent[]
+
+  /// Duplicate prevention: one record per student per lesson.
+  @@unique([lessonId, studentId])
+  @@index([organizationId, branchId, markedAt])
+  @@index([studentId, status])
+  @@index([lessonId, status])
+  @@index([organizationId, status, markedAt])
+  @@index([enrollmentId])
+  @@map("attendance_records")
+}
+
+/// Append-only amendment trail. Attendance is never silently rewritten: the
+/// record is updated inside the same transaction that writes this row.
+model AttendanceCorrection {
+  id                 String           @id @default(cuid())
+  attendanceRecordId String
+  attendanceRecord   AttendanceRecord @relation(fields: [attendanceRecordId], references: [id], onDelete: Cascade)
+
+  previousStatus      AttendanceStatus
+  newStatus           AttendanceStatus
+  previousMinutesLate Int?
+  newMinutesLate      Int?
+  reason              String
+
+  correctedById String
+  correctedBy   User   @relation("AttendanceCorrectedBy", fields: [correctedById], references: [id], onDelete: Restrict)
+
+  /// Populated only when the institution requires correction approval
+  /// (`attendance.requireCorrectionApproval`).
+  approvedById String?
+  approvedBy   User?     @relation("AttendanceCorrectionApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([attendanceRecordId, createdAt])
+  @@index([correctedById])
+  @@map("attendance_corrections")
+}
+
+enum AttendanceDeviceType {
+  FACE_TERMINAL
+  QR_SCANNER
+  CARD_READER
+  FINGERPRINT
+  TURNSTILE
+  MOBILE_APP
+}
+
+enum AttendanceDeviceStatus {
+  UNCONFIGURED
+  ACTIVE
+  OFFLINE
+  DISABLED
+}
+
+model AttendanceDevice {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  name         String
+  serialNumber String
+  type         AttendanceDeviceType
+  location     String?
+  status       AttendanceDeviceStatus @default(UNCONFIGURED)
+
+  /// Devices authenticate with a bearer token; only its hash is stored.
+  apiKeyHash  String?   @unique
+  apiKeyLast4 String?   @db.VarChar(8)
+  lastSeenAt  DateTime? @db.Timestamptz(3)
+  firmware    String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  attendanceRecords     AttendanceRecord[]
+  faceRecognitionEvents FaceRecognitionEvent[]
+  employeeAttendances   EmployeeAttendance[]
+
+  @@unique([organizationId, serialNumber])
+  @@index([organizationId, branchId, status])
+  @@map("attendance_devices")
+}
+
+enum BiometricSubjectType {
+  STUDENT
+  EMPLOYEE
+}
+
+enum BiometricEnrollmentStatus {
+  PENDING
+  ACTIVE
+  FAILED
+  REVOKED
+}
+
+/// Opaque link between a person and a recognition provider's enrollment.
+/// Contains no biometric data of any kind.
+model BiometricEnrollment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  subjectType BiometricSubjectType
+  studentId   String?
+  student     Student?             @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  employeeId  String?
+  employee    Employee?            @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  /// Provider key (e.g. "mock", "aws-rekognition"). Kept so a reference is
+  /// never interpreted by the wrong provider after a migration.
+  provider      String
+  /// Provider-side identifier. Opaque to this application.
+  externalRef   String
+  status        BiometricEnrollmentStatus @default(PENDING)
+  failureReason String?
+
+  consentId String?
+  consent   BiometricConsent? @relation(fields: [consentId], references: [id], onDelete: SetNull)
+
+  enrolledById String?
+  enrolledBy   User?   @relation("BiometricEnrolledBy", fields: [enrolledById], references: [id], onDelete: SetNull)
+
+  enrolledAt  DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt   DateTime? @db.Timestamptz(3)
+  revokedById String?
+  revokedBy   User?     @relation("BiometricRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([provider, externalRef])
+  @@index([organizationId, subjectType, status])
+  @@index([studentId])
+  @@index([employeeId])
+  @@map("biometric_enrollments")
+}
+
+/// Explicit, revocable consent for biometric processing. Enrollment without a
+/// live consent row is rejected by the use-case.
+model BiometricConsent {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  subjectType BiometricSubjectType
+  /// Points at Student.id or Employee.id depending on subjectType. Left as a
+  /// plain column because the referent is polymorphic; the use-case validates it.
+  subjectId   String
+
+  purpose             String
+  /// For a minor, consent is given by a guardian; for staff, by the user.
+  grantedByUserId     String?
+  grantedByUser       User?     @relation("BiometricConsentUser", fields: [grantedByUserId], references: [id], onDelete: SetNull)
+  grantedByGuardianId String?
+  grantedByGuardian   Guardian? @relation("BiometricConsentGuardian", fields: [grantedByGuardianId], references: [id], onDelete: SetNull)
+
+  documentId String?
+  document   Document? @relation("BiometricConsentDocument", fields: [documentId], references: [id], onDelete: SetNull)
+
+  grantedAt    DateTime  @default(now()) @db.Timestamptz(3)
+  revokedAt    DateTime? @db.Timestamptz(3)
+  revokeReason String?
+  ipAddress    String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  enrollments BiometricEnrollment[]
+
+  @@index([organizationId, subjectType, subjectId])
+  @@map("biometric_consents")
+}
+
+/// Outcome of every recognition attempt, including the failures. NOT_CONFIGURED
+/// is a first-class result so the UI can distinguish "no provider" from
+/// "no match" instead of implying a working biometric system.
+enum FaceRecognitionResult {
+  MATCHED
+  NO_MATCH
+  LOW_CONFIDENCE
+  MULTIPLE_MATCHES
+  NOT_ENROLLED
+  ERROR
+  NOT_CONFIGURED
+}
+
+model FaceRecognitionEvent {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  provider      String
+  result        FaceRecognitionResult
+  confidencePpm Int?
+
+  deviceId String?
+  device   AttendanceDevice? @relation(fields: [deviceId], references: [id], onDelete: SetNull)
+  lessonId String?
+  lesson   Lesson?           @relation(fields: [lessonId], references: [id], onDelete: SetNull)
+
+  matchedStudentId String?
+  matchedStudent   Student? @relation("FaceMatchedStudent", fields: [matchedStudentId], references: [id], onDelete: SetNull)
+
+  attendanceRecordId String?
+  attendanceRecord   AttendanceRecord? @relation(fields: [attendanceRecordId], references: [id], onDelete: SetNull)
+
+  errorCode    String?
+  errorMessage String?
+  latencyMs    Int?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([organizationId, createdAt])
+  @@index([organizationId, result, createdAt])
+  @@index([lessonId])
+  @@index([matchedStudentId])
+  @@map("face_recognition_events")
+}
+
+/// Short-lived, rotating token backing QR attendance. Only the hash is stored
+/// and a token is single-use, so a screenshot cannot be replayed.
+model QrToken {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  lessonId String
+  lesson   Lesson @relation(fields: [lessonId], references: [id], onDelete: Cascade)
+
+  tokenHash       String    @unique
+  rotationIndex   Int       @default(0)
+  expiresAt       DateTime  @db.Timestamptz(3)
+  usedAt          DateTime? @db.Timestamptz(3)
+  usedByStudentId String?
+  usedByStudent   Student?  @relation("QrTokenUsedByStudent", fields: [usedByStudentId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([lessonId, rotationIndex])
+  @@index([expiresAt])
+  @@map("qr_tokens")
+}

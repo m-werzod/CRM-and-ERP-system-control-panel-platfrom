@@ -1,0 +1,171 @@
+// ---------------------------------------------------------------------------
+// Admissions: Application -> review -> interview -> decision -> Student.
+//
+// The application carries the applicant's details while they are not yet a
+// student. On acceptance, CreateStudentFromApplication copies them forward once
+// and links both directions (Application.studentId / Student.applicationId), so
+// the person exists exactly once in the system.
+// ---------------------------------------------------------------------------
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  UNDER_REVIEW
+  INTERVIEW_SCHEDULED
+  INTERVIEW_COMPLETED
+  ACCEPTED
+  REJECTED
+  WAITLISTED
+  WITHDRAWN
+  ENROLLED
+}
+
+enum ApplicationDecision {
+  ACCEPT
+  REJECT
+  WAITLIST
+}
+
+model Application {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  applicationNumber String
+
+  /// CRM provenance. Several applications may come from one lead over time.
+  leadId String?
+  lead   Lead?   @relation(fields: [leadId], references: [id], onDelete: SetNull)
+
+  /// Set once accepted and converted. Reverse side: Student.applicationId.
+  student Student? @relation("ApplicationStudent")
+
+  firstName       String
+  lastName        String
+  middleName      String?
+  dateOfBirth     DateTime? @db.Date
+  gender          Gender    @default(UNSPECIFIED)
+  phone           String
+  phoneNormalized String
+  email           String?
+  addressLine     String?
+  city            String?
+
+  guardianName     String?
+  guardianPhone    String?
+  guardianRelation GuardianRelationship?
+
+  programId        String
+  program          Program       @relation(fields: [programId], references: [id], onDelete: Restrict)
+  desiredStartDate DateTime?     @db.Date
+  desiredLevel     ProgramLevel?
+  /// Optional placement-test result recorded during review.
+  placementScore   Int?
+
+  status      ApplicationStatus @default(DRAFT)
+  submittedAt DateTime?         @db.Timestamptz(3)
+
+  reviewedById String?
+  reviewedBy   User?     @relation("ApplicationReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime? @db.Timestamptz(3)
+
+  decision       ApplicationDecision?
+  decisionReason String?
+  decidedAt      DateTime?            @db.Timestamptz(3)
+  admissionDate  DateTime?            @db.Date
+
+  notes String?
+
+  createdById String?
+  createdBy   User?   @relation("ApplicationCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  reviews    ApplicationReview[]
+  interviews Interview[]
+  documents  Document[]          @relation("ApplicationDocuments")
+
+  @@unique([organizationId, applicationNumber])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, status, createdAt])
+  @@index([organizationId, phoneNormalized])
+  @@index([leadId])
+  @@map("applications")
+}
+
+enum ApplicationReviewStage {
+  DOCUMENT_CHECK
+  PLACEMENT_TEST
+  INTERVIEW
+  FINANCE_CHECK
+  FINAL_APPROVAL
+}
+
+enum ApplicationReviewStatus {
+  PENDING
+  PASSED
+  FAILED
+  SKIPPED
+}
+
+/// One row per review gate, so an admissions funnel is auditable stage by stage
+/// rather than collapsing into a single status field.
+model ApplicationReview {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  stage  ApplicationReviewStage
+  status ApplicationReviewStatus @default(PENDING)
+  notes  String?
+  score  Int?
+
+  reviewerId String?
+  reviewer   User?   @relation("ApplicationReviewReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+
+  completedAt DateTime? @db.Timestamptz(3)
+  createdAt   DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt   DateTime  @updatedAt @db.Timestamptz(3)
+
+  @@unique([applicationId, stage])
+  @@index([applicationId, status])
+  @@map("application_reviews")
+}
+
+enum InterviewStatus {
+  SCHEDULED
+  COMPLETED
+  NO_SHOW
+  CANCELLED
+  RESCHEDULED
+}
+
+model Interview {
+  id            String      @id @default(cuid())
+  applicationId String
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  scheduledAt     DateTime        @db.Timestamptz(3)
+  durationMinutes Int             @default(30)
+  location        String?
+  status          InterviewStatus @default(SCHEDULED)
+
+  interviewerId String?
+  interviewer   User?   @relation("InterviewInterviewer", fields: [interviewerId], references: [id], onDelete: SetNull)
+
+  score          Int?
+  notes          String?
+  recommendation ApplicationDecision?
+  completedAt    DateTime?            @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([applicationId, scheduledAt])
+  @@index([interviewerId, scheduledAt])
+  @@map("interviews")
+}

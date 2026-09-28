@@ -1,0 +1,418 @@
+// ---------------------------------------------------------------------------
+// Authentication & RBAC.
+//
+// AUTHENTICATION
+// Server-side sessions, not JWTs. A login mints a 32-byte opaque token; only its
+// SHA-256 hash is stored, so a database leak yields no usable session. Sessions
+// carry both an idle expiry (`expiresAt`, extended on use) and a hard ceiling
+// (`absoluteExpiresAt`), and can be revoked instantly -- which a stateless JWT
+// cannot. Passwords are hashed with Argon2id.
+//
+// AUTHORISATION
+// Two orthogonal axes, resolved once per request into an AccessContext:
+//
+//   PERMISSIONS -- what actions are allowed. Granular dotted keys
+//                  (`students.create`, `payments.refund`) attached to Roles.
+//                  The Permission table is the global catalogue of what exists;
+//                  Roles are per-organisation so custom roles are just data.
+//
+//   SCOPE       -- which rows those actions may touch. Role.scope is
+//                  ORGANIZATION (all branches), BRANCH (only branches the user
+//                  is assigned to) or SELF (only records assigned to the user,
+//                  e.g. a teacher's own groups). A user's effective scope is the
+//                  widest across their roles.
+//
+// Permission checks are enforced server-side on every sensitive operation and
+// scope is applied as a WHERE clause in the data layer, never as a UI filter.
+//
+// Role.level guards privilege escalation: a user may not grant or edit a role
+// whose level is greater than or equal to their own highest level.
+// ---------------------------------------------------------------------------
+
+enum UserStatus {
+  /// Created but has not yet completed first login.
+  INVITED
+  ACTIVE
+  /// Deactivated by an administrator; cannot authenticate.
+  INACTIVE
+  /// Auto-locked by failed-login protection.
+  LOCKED
+  SUSPENDED
+}
+
+enum RoleScope {
+  ORGANIZATION
+  BRANCH
+  SELF
+}
+
+model User {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  email              String
+  username           String?
+  /// Argon2id. Never a plaintext or reversibly-encoded password.
+  passwordHash       String
+  passwordChangedAt  DateTime? @db.Timestamptz(3)
+  /// Set for admin-created accounts with a temporary password.
+  mustChangePassword Boolean   @default(false)
+
+  firstName       String
+  lastName        String
+  phone           String?
+  phoneNormalized String?
+  avatarUrl       String?
+
+  status   UserStatus @default(INVITED)
+  locale   Locale?
+  /// Overrides the organisation timezone for this user's displayed times.
+  timezone String?
+
+  emailVerifiedAt DateTime? @db.Timestamptz(3)
+  lastLoginAt     DateTime? @db.Timestamptz(3)
+  lastLoginIp     String?
+
+  // --- failed-login / brute-force protection ---
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime? @db.Timestamptz(3)
+
+  // --- optional TOTP two-factor. `twoFactorSecret` is stored encrypted with
+  //     the application secret, not in plaintext. ---
+  twoFactorEnabled   Boolean   @default(false)
+  twoFactorSecret    String?
+  twoFactorEnabledAt DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  // -------------------------------------------------------------------------
+  // Identity links
+  // -------------------------------------------------------------------------
+  employee        Employee? @relation("EmployeeUser")
+  studentProfile  Student?  @relation("StudentUser")
+  guardianProfile Guardian? @relation("GuardianUser")
+
+  // -------------------------------------------------------------------------
+  // Auth internals
+  // -------------------------------------------------------------------------
+  userRoles              UserRole[]              @relation("UserRoleUser")
+  userRolesGranted       UserRole[]              @relation("UserRoleGrantedBy")
+  userBranches           UserBranch[]
+  sessions               Session[]
+  passwordResetTokens    PasswordResetToken[]
+  twoFactorRecoveryCodes TwoFactorRecoveryCode[]
+
+  // -------------------------------------------------------------------------
+  // Actor back-relations. Every stored userId is a real foreign key, so an
+  // audit trail can never point at an id that does not exist.
+  // -------------------------------------------------------------------------
+  settingsUpdated Setting[] @relation("SettingUpdatedBy")
+
+  studentsCreated  Student[]  @relation("StudentCreatedBy")
+  guardiansCreated Guardian[] @relation("GuardianCreatedBy")
+
+  groupsCreated           Group[]        @relation("GroupCreatedBy")
+  groupTeacherAssignments GroupTeacher[] @relation("GroupTeacherAssignedBy")
+  enrollmentsCreated      Enrollment[]   @relation("EnrollmentCreatedBy")
+
+  scheduleSlotsCreated       ScheduleSlot[] @relation("ScheduleSlotCreatedBy")
+  lessonsAttendanceSubmitted Lesson[]       @relation("LessonAttendanceSubmittedBy")
+  lessonsAttendanceApproved  Lesson[]       @relation("LessonAttendanceApprovedBy")
+
+  attendanceMarked              AttendanceRecord[]     @relation("AttendanceMarkedBy")
+  attendanceCorrectionsMade     AttendanceCorrection[] @relation("AttendanceCorrectedBy")
+  attendanceCorrectionsApproved AttendanceCorrection[] @relation("AttendanceCorrectionApprovedBy")
+  biometricEnrollmentsCreated   BiometricEnrollment[]  @relation("BiometricEnrolledBy")
+  biometricEnrollmentsRevoked   BiometricEnrollment[]  @relation("BiometricRevokedBy")
+  biometricConsentsGranted      BiometricConsent[]     @relation("BiometricConsentUser")
+
+  leadsAssigned          Lead[]              @relation("LeadAssignedTo")
+  leadsCreated           Lead[]              @relation("LeadCreatedBy")
+  leadActivities         LeadActivity[]      @relation("LeadActivityCreatedBy")
+  leadStatusChanges      LeadStatusHistory[] @relation("LeadStatusChangedBy")
+  followUpTasksAssigned  FollowUpTask[]      @relation("FollowUpAssignedTo")
+  followUpTasksCompleted FollowUpTask[]      @relation("FollowUpCompletedBy")
+  followUpTasksCreated   FollowUpTask[]      @relation("FollowUpCreatedBy")
+  trialLessonsCreated    TrialLesson[]       @relation("TrialLessonCreatedBy")
+
+  applicationsReviewed Application[]       @relation("ApplicationReviewedBy")
+  applicationsCreated  Application[]       @relation("ApplicationCreatedBy")
+  applicationReviews   ApplicationReview[] @relation("ApplicationReviewReviewer")
+  interviews           Interview[]         @relation("InterviewInterviewer")
+
+  feePlansCreated           FeePlan[]             @relation("FeePlanCreatedBy")
+  studentFeePlansCreated    StudentFeePlan[]      @relation("StudentFeePlanCreatedBy")
+  invoicesCreated           Invoice[]             @relation("InvoiceCreatedBy")
+  discountsCreated          Discount[]            @relation("DiscountCreatedBy")
+  studentDiscountsRequested StudentDiscount[]     @relation("StudentDiscountRequestedBy")
+  studentDiscountsApproved  StudentDiscount[]     @relation("StudentDiscountApprovedBy")
+  invoiceDiscountsApproved  InvoiceDiscount[]     @relation("InvoiceDiscountApprovedBy")
+  paymentsReceived          Payment[]             @relation("PaymentReceivedBy")
+  paymentsReversed          Payment[]             @relation("PaymentReversedBy")
+  refundsRequested          Refund[]              @relation("RefundRequestedBy")
+  refundsApproved           Refund[]              @relation("RefundApprovedBy")
+  studentCreditsCreated     StudentCredit[]       @relation("StudentCreditCreatedBy")
+  ledgerEntriesCreated      LedgerEntry[]         @relation("LedgerCreatedBy")
+  adjustmentsRequested      FinancialAdjustment[] @relation("AdjustmentRequestedBy")
+  adjustmentsApproved       FinancialAdjustment[] @relation("AdjustmentApprovedBy")
+  paymentSchedulesCreated   PaymentSchedule[]     @relation("PaymentScheduleCreatedBy")
+
+  homeworkCreated    Homework[]           @relation("HomeworkCreatedBy")
+  homeworkGraded     HomeworkSubmission[] @relation("HomeworkGradedBy")
+  examsCreated       Exam[]               @relation("ExamCreatedBy")
+  examResultsGraded  ExamResult[]         @relation("ExamGradedBy")
+  gradesGiven        Grade[]              @relation("GradeGradedBy")
+  certificatesIssued Certificate[]        @relation("CertificateIssuedBy")
+
+  employeeAttendanceMarked   EmployeeAttendance[] @relation("EmployeeAttendanceMarkedBy")
+  employeeAttendanceApproved EmployeeAttendance[] @relation("EmployeeAttendanceApprovedBy")
+  leaveRequestsApproved      LeaveRequest[]       @relation("LeaveApprovedBy")
+  salaryComponentsCreated    SalaryComponent[]    @relation("SalaryComponentCreatedBy")
+  payrollRunsCalculated      PayrollRun[]         @relation("PayrollCalculatedBy")
+  payrollRunsApproved        PayrollRun[]         @relation("PayrollApprovedBy")
+
+  notificationTemplatesCreated NotificationTemplate[]   @relation("NotificationTemplateCreatedBy")
+  notifications                Notification[]           @relation("NotificationUserRecipient")
+  notificationPreferences      NotificationPreference[] @relation("NotificationPreferenceUser")
+  announcementsCreated         Announcement[]           @relation("AnnouncementCreatedBy")
+  announcementReads            AnnouncementRead[]       @relation("AnnouncementReadUser")
+  communicationLogsCreated     CommunicationLog[]       @relation("CommunicationLogCreatedBy")
+
+  documentsUploaded  Document[]          @relation("DocumentUploadedBy")
+  documentAccessLogs DocumentAccessLog[] @relation("DocumentAccessUser")
+
+  auditLogs                 AuditLog[]          @relation("AuditActor")
+  activityEvents            ActivityEvent[]     @relation("ActivityActor")
+  jobsCreated               Job[]               @relation("JobCreatedBy")
+  webhookEndpointsCreated   WebhookEndpoint[]   @relation("WebhookEndpointCreatedBy")
+  importJobsCreated         ImportJob[]         @relation("ImportJobCreatedBy")
+  exportJobsCreated         ExportJob[]         @relation("ExportJobCreatedBy")
+  savedReportsCreated       SavedReport[]       @relation("SavedReportCreatedBy")
+  integrationConfigsUpdated IntegrationConfig[] @relation("IntegrationConfigUpdatedBy")
+
+  /// Email is unique per organisation, not globally: the same person may hold
+  /// accounts in two tenants.
+  @@unique([organizationId, email])
+  @@unique([organizationId, username])
+  @@index([organizationId, status])
+  @@index([email])
+  @@index([organizationId, lastName, firstName])
+  @@map("users")
+}
+
+/// Per-organisation role. The eleven baseline roles are seeded with
+/// `isSystem = true` and cannot be deleted or have their key changed; anything
+/// else is a custom role, which makes custom roles pure data.
+model Role {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Stable machine key, e.g. "BRANCH_ADMIN".
+  key         String
+  name        String
+  description String?
+  scope       RoleScope @default(BRANCH)
+  /// Higher wins. A user cannot grant a role at or above their own highest
+  /// level, which blocks self-escalation.
+  level       Int       @default(10)
+  isSystem    Boolean   @default(false)
+  isDefault   Boolean   @default(false)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  permissions         RolePermission[]
+  userRoles           UserRole[]
+  announcementTargets AnnouncementTarget[]
+
+  @@unique([organizationId, key])
+  @@index([organizationId, level])
+  @@map("roles")
+}
+
+/// Global catalogue of grantable actions -- not organisation-scoped, because the
+/// set of things the software can do is a property of the software. Seeded from
+/// src/server/rbac/permissions.ts, which is the single source of truth.
+model Permission {
+  id          String  @id @default(cuid())
+  /// e.g. "payments.refund".
+  key         String  @unique
+  /// e.g. "payments".
+  module      String
+  /// e.g. "refund".
+  action      String
+  description String?
+  /// Marks permissions that grant financial or security-sensitive power, so the
+  /// role editor can warn before granting them.
+  isSensitive Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  roles RolePermission[]
+
+  @@index([module])
+  @@map("permissions")
+}
+
+model RolePermission {
+  id           String     @id @default(cuid())
+  roleId       String
+  role         Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permissionId String
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+/// Grants a role to a user, optionally narrowed to one branch. A NULL branchId
+/// means the role applies across every branch the user can reach.
+model UserRole {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation("UserRoleUser", fields: [userId], references: [id], onDelete: Cascade)
+  roleId String
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  grantedById String?
+  grantedBy   User?     @relation("UserRoleGrantedBy", fields: [grantedById], references: [id], onDelete: SetNull)
+  grantedAt   DateTime  @default(now()) @db.Timestamptz(3)
+  expiresAt   DateTime? @db.Timestamptz(3)
+
+  @@unique([userId, roleId, branchId])
+  @@index([userId])
+  @@index([roleId])
+  @@index([branchId])
+  @@map("user_roles")
+}
+
+/// Explicit branch access list, consulted for users whose effective role scope
+/// is BRANCH. Kept separate from UserRole so one accountant can cover several
+/// branches without duplicating role grants.
+model UserBranch {
+  id       String @id @default(cuid())
+  userId   String
+  user     User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  isPrimary Boolean @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([userId, branchId])
+  @@index([branchId])
+  @@map("user_branches")
+}
+
+/// Server-side session. Only hashes are stored.
+model Session {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// SHA-256 of the opaque session token held in the cookie.
+  tokenHash     String @unique
+  /// SHA-256 of the double-submit CSRF token bound to this session.
+  csrfTokenHash String
+
+  ipAddress String?
+  userAgent String?
+
+  /// Idle timeout, extended on each authenticated request.
+  expiresAt         DateTime @db.Timestamptz(3)
+  /// Hard ceiling; re-authentication is required past this instant regardless of
+  /// activity.
+  absoluteExpiresAt DateTime @db.Timestamptz(3)
+  lastUsedAt        DateTime @default(now()) @db.Timestamptz(3)
+
+  revokedAt    DateTime? @db.Timestamptz(3)
+  revokeReason String?
+
+  /// False until a 2FA challenge is satisfied, when the user has 2FA enabled.
+  isFullyAuthenticated Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([userId, revokedAt])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+model PasswordResetToken {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tokenHash String    @unique
+  expiresAt DateTime  @db.Timestamptz(3)
+  usedAt    DateTime? @db.Timestamptz(3)
+  ipAddress String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([userId, usedAt])
+  @@index([expiresAt])
+  @@map("password_reset_tokens")
+}
+
+/// Single-use TOTP recovery codes, stored hashed.
+model TwoFactorRecoveryCode {
+  id     String @id @default(cuid())
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  codeHash String    @unique
+  usedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([userId, usedAt])
+  @@map("two_factor_recovery_codes")
+}
+
+enum LoginFailureReason {
+  UNKNOWN_EMAIL
+  BAD_PASSWORD
+  ACCOUNT_INACTIVE
+  ACCOUNT_LOCKED
+  RATE_LIMITED
+  TWO_FACTOR_FAILED
+  ORGANIZATION_SUSPENDED
+}
+
+/// Every authentication attempt, successful or not. Backs brute-force lockout,
+/// the security log, and "unusual sign-in" alerts. The submitted email is
+/// recorded even when no such user exists -- that is exactly the signal an
+/// enumeration attempt produces.
+model LoginAttempt {
+  id             String        @id @default(cuid())
+  organizationId String?
+  organization   Organization? @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+
+  email     String
+  /// Set only when the email resolved to a real user.
+  userId    String?
+  success   Boolean
+  reason    LoginFailureReason?
+  ipAddress String?
+  userAgent String?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([email, createdAt])
+  @@index([ipAddress, createdAt])
+  @@index([organizationId, success, createdAt])
+  @@map("login_attempts")
+}

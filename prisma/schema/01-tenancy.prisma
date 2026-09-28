@@ -1,0 +1,295 @@
+// ---------------------------------------------------------------------------
+// Tenancy & organisational structure
+// Organization -> Branch -> Department / Room, plus the academic calendar
+// and the configurable-settings store.
+// ---------------------------------------------------------------------------
+
+enum OrganizationStatus {
+  ACTIVE
+  SUSPENDED
+  ARCHIVED
+}
+
+enum Locale {
+  UZ
+  RU
+  EN
+}
+
+model Organization {
+  id        String             @id @default(cuid())
+  name      String
+  slug      String             @unique
+  legalName String?
+  status    OrganizationStatus @default(ACTIVE)
+
+  // Defaults inherited by every branch / user unless explicitly overridden.
+  defaultCurrency String @default("UZS") @db.VarChar(3)
+  timezone        String @default("Asia/Tashkent")
+  defaultLocale   Locale @default(UZ)
+
+  email       String?
+  phone       String?
+  website     String?
+  addressLine String?
+  city        String?
+  country     String?
+  logoUrl     String?
+  taxId       String?
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  branches              Branch[]
+  departments           Department[]
+  academicYears         AcademicYear[]
+  rooms                 Room[]
+  settings              Setting[]
+  users                 User[]
+  roles                 Role[]
+  students              Student[]
+  guardians             Guardian[]
+  employees             Employee[]
+  subjects              Subject[]
+  programs              Program[]
+  groups                Group[]
+  gradingScales         GradingScale[]
+  scheduleSlots         ScheduleSlot[]
+  lessons               Lesson[]
+  attendanceRecords     AttendanceRecord[]
+  attendanceDevices     AttendanceDevice[]
+  biometricEnrollments  BiometricEnrollment[]
+  biometricConsents     BiometricConsent[]
+  faceRecognitionEvents FaceRecognitionEvent[]
+  qrTokens              QrToken[]
+  leads                 Lead[]
+  followUpTasks         FollowUpTask[]
+  trialLessons          TrialLesson[]
+  applications          Application[]
+  feePlans              FeePlan[]
+  invoices              Invoice[]
+  discounts             Discount[]
+  payments              Payment[]
+  refunds               Refund[]
+  studentCredits        StudentCredit[]
+  ledgerEntries         LedgerEntry[]
+  financialAdjustments  FinancialAdjustment[]
+  paymentSchedules      PaymentSchedule[]
+  paymentMethodConfigs  PaymentMethodConfig[]
+  taxRates              TaxRate[]
+  homework              Homework[]
+  exams                 Exam[]
+  grades                Grade[]
+  certificates          Certificate[]
+  employeeAttendances   EmployeeAttendance[]
+  leaveTypes            LeaveType[]
+  leaveRequests         LeaveRequest[]
+  payrollRuns           PayrollRun[]
+  notificationTemplates NotificationTemplate[]
+  notifications         Notification[]
+  announcements         Announcement[]
+  communicationLogs     CommunicationLog[]
+  documents             Document[]
+  auditLogs             AuditLog[]
+  activityEvents        ActivityEvent[]
+  jobs                  Job[]
+  cronSchedules         CronSchedule[]
+  webhookEndpoints      WebhookEndpoint[]
+  webhookEvents         WebhookEvent[]
+  idempotencyKeys       IdempotencyKey[]
+  importJobs            ImportJob[]
+  exportJobs            ExportJob[]
+  savedReports          SavedReport[]
+  integrationConfigs    IntegrationConfig[]
+  loginAttempts         LoginAttempt[]
+  documentCounters      DocumentCounter[]
+
+  @@index([status])
+  @@map("organizations")
+}
+
+model Branch {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String
+  code        String
+  addressLine String?
+  city        String?
+  phone       String?
+  email       String?
+  /// Overrides Organization.timezone when a branch sits in another zone.
+  timezone    String?
+  currency    String? @db.VarChar(3)
+  isActive    Boolean @default(true)
+
+  openedAt  DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  departments           Department[]
+  rooms                 Room[]
+  settings              Setting[]
+  userBranches          UserBranch[]
+  userRoles             UserRole[]
+  students              Student[]
+  employees             Employee[]
+  groups                Group[]
+  scheduleSlots         ScheduleSlot[]
+  lessons               Lesson[]
+  attendanceRecords     AttendanceRecord[]
+  attendanceDevices     AttendanceDevice[]
+  faceRecognitionEvents FaceRecognitionEvent[]
+  leads                 Lead[]
+  followUpTasks         FollowUpTask[]
+  applications          Application[]
+  feePlans              FeePlan[]
+  invoices              Invoice[]
+  payments              Payment[]
+  ledgerEntries         LedgerEntry[]
+  paymentMethodConfigs  PaymentMethodConfig[]
+  homework              Homework[]
+  exams                 Exam[]
+  employeeAttendances   EmployeeAttendance[]
+  payrollRuns           PayrollRun[]
+  announcements         Announcement[]
+  announcementTargets   AnnouncementTarget[]
+  documents             Document[]
+  auditLogs             AuditLog[]
+  importJobs            ImportJob[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@map("branches")
+}
+
+model Department {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  name        String
+  code        String
+  description String?
+  isActive    Boolean @default(true)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  employees Employee[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, branchId])
+  @@map("departments")
+}
+
+model Room {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  name     String
+  code     String
+  capacity Int     @default(20)
+  floor    String?
+  notes    String?
+  isActive Boolean @default(true)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  groups        Group[]
+  scheduleSlots ScheduleSlot[]
+  lessons       Lesson[]
+  exams         Exam[]
+
+  @@unique([branchId, code])
+  @@index([organizationId, branchId, isActive])
+  @@map("rooms")
+}
+
+model AcademicYear {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name      String
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+  isClosed  Boolean  @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  terms  Term[]
+  groups Group[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, isCurrent])
+  @@map("academic_years")
+}
+
+model Term {
+  id             String       @id @default(cuid())
+  academicYearId String
+  academicYear   AcademicYear @relation(fields: [academicYearId], references: [id], onDelete: Cascade)
+
+  name      String
+  sequence  Int
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  isCurrent Boolean  @default(false)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  groups Group[]
+  grades Grade[]
+  exams  Exam[]
+
+  @@unique([academicYearId, sequence])
+  @@index([academicYearId, isCurrent])
+  @@map("terms")
+}
+
+enum SettingScope {
+  ORGANIZATION
+  BRANCH
+}
+
+/// Configurable business rules: late thresholds, attendance weights, payment
+/// due days, grading scale, currency, academic year. Never hard-code these in
+/// application code -- read them through src/server/settings.
+model Setting {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  scope SettingScope @default(ORGANIZATION)
+  key   String
+  value Json
+
+  updatedById String?
+  updatedBy   User?   @relation("SettingUpdatedBy", fields: [updatedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  /// A NULL branchId row is the organisation-wide default; a row carrying a
+  /// branchId overrides that default for the one branch.
+  @@unique([organizationId, branchId, key])
+  @@index([organizationId, key])
+  @@map("settings")
+}

@@ -1,0 +1,812 @@
+// ---------------------------------------------------------------------------
+// Finance / ERP.
+//
+// THE MONEY MODEL
+// ---------------
+// `LedgerEntry` is the append-only source of truth. Every financial fact --
+// invoice issued, payment received, discount granted, refund paid, credit
+// issued or consumed, write-off -- is one immutable ledger row. Nothing is ever
+// UPDATEd or DELETEd there; a mistake is corrected by writing a reversing entry
+// that points at the original via `reversalOfId`.
+//
+// Invoice.paidTotalMinor / refundedTotalMinor / balanceMinor and
+// StudentCredit.balanceMinor are DERIVED CACHES. They exist so listing screens
+// and debt reports do not aggregate the ledger on every request. They are
+// recomputed from ledger rows inside the same transaction that appends those
+// rows (see src/server/services/finance/recalculateInvoice.ts) and are never
+// writable from a request payload. Any drift is therefore a bug with a single
+// cause, and `npm run verify:ledger` re-derives and compares them.
+//
+// Money: BigInt minor units + explicit ISO-4217 `currency`. Percentages:
+// integer parts-per-million. No floats anywhere in this file.
+// ---------------------------------------------------------------------------
+
+enum BillingCycle {
+  ONE_TIME
+  MONTHLY
+  QUARTERLY
+  PER_TERM
+  ANNUAL
+  PER_LESSON
+}
+
+/// A priced tuition offering. Branch-nullable so an organisation can keep one
+/// price list or diverge per branch.
+model FeePlan {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  name        String
+  code        String
+  description String?
+
+  programId String?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+
+  billingCycle      BillingCycle @default(MONTHLY)
+  amountMinor       BigInt
+  currency          String       @db.VarChar(3)
+  /// For instalment-based plans: how many invoices the plan generates.
+  installmentCount  Int?
+  /// Days after issue that an invoice from this plan falls due.
+  dueDaysAfterIssue Int          @default(10)
+  isActive          Boolean      @default(true)
+
+  createdById String?
+  createdBy   User?   @relation("FeePlanCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  studentFeePlans StudentFeePlan[]
+  invoices        Invoice[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, branchId, isActive])
+  @@map("fee_plans")
+}
+
+enum StudentFeePlanStatus {
+  ACTIVE
+  ENDED
+  SUSPENDED
+}
+
+/// Dated assignment of a fee plan to a student. Changing a student's tuition
+/// closes the current row and opens a new one, so invoices raised last term
+/// remain explainable at the price that was then in force.
+model StudentFeePlan {
+  id        String  @id @default(cuid())
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  feePlanId String
+  feePlan   FeePlan @relation(fields: [feePlanId], references: [id], onDelete: Restrict)
+  groupId   String?
+  group     Group?  @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  /// Negotiated override of FeePlan.amountMinor for this student.
+  amountMinor BigInt
+  currency    String @db.VarChar(3)
+
+  status    StudentFeePlanStatus @default(ACTIVE)
+  startDate DateTime             @db.Date
+  endDate   DateTime?            @db.Date
+  endReason String?
+
+  createdById String?
+  createdBy   User?   @relation("StudentFeePlanCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([studentId, status])
+  @@index([feePlanId])
+  @@index([studentId, endDate])
+  @@map("student_fee_plans")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  ISSUED
+  PARTIALLY_PAID
+  PAID
+  OVERDUE
+  CANCELLED
+  VOID
+  REFUNDED
+  WRITTEN_OFF
+}
+
+model Invoice {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  invoiceNumber String
+
+  studentId String
+  student   Student  @relation(fields: [studentId], references: [id], onDelete: Restrict)
+  feePlanId String?
+  feePlan   FeePlan? @relation(fields: [feePlanId], references: [id], onDelete: SetNull)
+
+  status   InvoiceStatus @default(DRAFT)
+  currency String        @db.VarChar(3)
+
+  // --- computed from InvoiceItem rows when the invoice is issued ---
+  subtotalMinor      BigInt @default(0)
+  discountTotalMinor BigInt @default(0)
+  taxTotalMinor      BigInt @default(0)
+  totalMinor         BigInt @default(0)
+
+  // --- DERIVED CACHES: recomputed from LedgerEntry inside the writing
+  //     transaction. Never accept these from a request body. ---
+  paidTotalMinor     BigInt @default(0)
+  refundedTotalMinor BigInt @default(0)
+  writtenOffMinor    BigInt @default(0)
+  /// totalMinor - paidTotalMinor - writtenOffMinor + refundedTotalMinor
+  balanceMinor       BigInt @default(0)
+
+  issueDate   DateTime  @db.Date
+  dueDate     DateTime  @db.Date
+  periodStart DateTime? @db.Date
+  periodEnd   DateTime? @db.Date
+  paidAt      DateTime? @db.Timestamptz(3)
+
+  notes        String?
+  cancelledAt  DateTime? @db.Timestamptz(3)
+  cancelReason String?
+  voidedAt     DateTime? @db.Timestamptz(3)
+
+  createdById String?
+  createdBy   User?   @relation("InvoiceCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  items                InvoiceItem[]
+  invoiceDiscounts     InvoiceDiscount[]
+  paymentAllocations   PaymentAllocation[]
+  payments             Payment[]
+  refunds              Refund[]
+  ledgerEntries        LedgerEntry[]
+  financialAdjustments FinancialAdjustment[]
+  scheduleInstallments PaymentScheduleInstallment[]
+  documents            Document[]                   @relation("InvoiceDocuments")
+
+  @@unique([organizationId, invoiceNumber])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, studentId, status])
+  /// Drives the debt-aging report.
+  @@index([organizationId, status, dueDate])
+  @@index([organizationId, issueDate])
+  @@index([studentId, dueDate])
+  @@map("invoices")
+}
+
+enum InvoiceItemKind {
+  TUITION
+  REGISTRATION_FEE
+  EXAM_FEE
+  MATERIALS
+  CERTIFICATE_FEE
+  LATE_FEE
+  OTHER
+}
+
+model InvoiceItem {
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  description String
+  kind        InvoiceItemKind @default(TUITION)
+
+  programId String?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+  groupId   String?
+  group     Group?   @relation(fields: [groupId], references: [id], onDelete: SetNull)
+
+  quantity       Int    @default(1)
+  unitPriceMinor BigInt
+  discountMinor  BigInt @default(0)
+  taxRatePpm     Int    @default(0)
+  taxMinor       BigInt @default(0)
+  /// quantity * unitPriceMinor - discountMinor + taxMinor
+  totalMinor     BigInt
+
+  sequence Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([invoiceId, sequence])
+  @@map("invoice_items")
+}
+
+enum DiscountType {
+  FIXED
+  PERCENT
+  SCHOLARSHIP
+}
+
+enum DiscountAppliesTo {
+  TUITION
+  ALL_ITEMS
+  REGISTRATION
+}
+
+model Discount {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  code        String
+  name        String
+  description String?
+  type        DiscountType
+  appliesTo   DiscountAppliesTo @default(TUITION)
+
+  /// Exactly one of these is set, per `type`: FIXED/SCHOLARSHIP use
+  /// amountMinor, PERCENT uses percentPpm (10% == 100_000).
+  amountMinor    BigInt?
+  percentPpm     Int?
+  currency       String? @db.VarChar(3)
+  /// Ceiling for percentage discounts.
+  maxAmountMinor BigInt?
+
+  requiresApproval Boolean   @default(true)
+  validFrom        DateTime? @db.Date
+  validTo          DateTime? @db.Date
+  maxRedemptions   Int?
+  timesRedeemed    Int       @default(0)
+  isActive         Boolean   @default(true)
+
+  createdById String?
+  createdBy   User?   @relation("DiscountCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  studentDiscounts StudentDiscount[]
+  invoiceDiscounts InvoiceDiscount[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@map("discounts")
+}
+
+enum StudentDiscountStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  EXPIRED
+  REVOKED
+}
+
+/// A discount granted to a student, with an explicit approval trail: who asked,
+/// who approved, when, and why.
+model StudentDiscount {
+  id         String   @id @default(cuid())
+  studentId  String
+  student    Student  @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  discountId String
+  discount   Discount @relation(fields: [discountId], references: [id], onDelete: Restrict)
+
+  amountMinor BigInt?
+  percentPpm  Int?
+  currency    String? @db.VarChar(3)
+  reason      String
+
+  status StudentDiscountStatus @default(PENDING_APPROVAL)
+
+  requestedById   String?
+  requestedBy     User?     @relation("StudentDiscountRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedById    String?
+  approvedBy      User?     @relation("StudentDiscountApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt      DateTime? @db.Timestamptz(3)
+  rejectionReason String?
+
+  validFrom DateTime? @db.Date
+  validTo   DateTime? @db.Date
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([studentId, status])
+  @@index([discountId])
+  @@map("student_discounts")
+}
+
+/// The discount as actually applied to one invoice, frozen at the amount
+/// computed then. Later edits to the Discount definition cannot retroactively
+/// change an issued invoice.
+model InvoiceDiscount {
+  id        String  @id @default(cuid())
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+
+  discountId String?
+  discount   Discount? @relation(fields: [discountId], references: [id], onDelete: SetNull)
+
+  label       String
+  type        DiscountType
+  percentPpm  Int?
+  amountMinor BigInt
+  currency    String       @db.VarChar(3)
+  reason      String?
+
+  approvedById String?
+  approvedBy   User?     @relation("InvoiceDiscountApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt   DateTime? @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([invoiceId])
+  @@index([discountId])
+  @@map("invoice_discounts")
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  ONLINE
+  CREDIT_NOTE
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REVERSED
+}
+
+model Payment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  paymentNumber String
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Restrict)
+
+  /// Convenience pointer to the primary invoice. The authoritative split across
+  /// invoices lives in PaymentAllocation, which also carries any overpayment
+  /// remainder into a StudentCredit.
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  method      PaymentMethod
+  status      PaymentStatus @default(COMPLETED)
+  amountMinor BigInt
+  currency    String        @db.VarChar(3)
+
+  receivedAt  DateTime @default(now()) @db.Timestamptz(3)
+  reference   String?
+  /// Gateway transaction id for ONLINE payments.
+  providerRef String?
+  providerKey String?
+
+  /// Guarantees a retried request or replayed webhook cannot double-post.
+  idempotencyKey String @unique
+
+  receivedById String?
+  receivedBy   User?   @relation("PaymentReceivedBy", fields: [receivedById], references: [id], onDelete: SetNull)
+
+  notes          String?
+  reversedAt     DateTime? @db.Timestamptz(3)
+  reversalReason String?
+  reversedById   String?
+  reversedBy     User?     @relation("PaymentReversedBy", fields: [reversedById], references: [id], onDelete: SetNull)
+
+  /// Set when the payment was funded from a student credit rather than cash.
+  sourceCreditId String?
+  sourceCredit   StudentCredit? @relation("CreditFundedPayments", fields: [sourceCreditId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  allocations   PaymentAllocation[]
+  refunds       Refund[]
+  ledgerEntries LedgerEntry[]
+  credits       StudentCredit[]     @relation("CreditSourcePayment")
+
+  @@unique([organizationId, paymentNumber])
+  @@index([organizationId, branchId, receivedAt])
+  @@index([organizationId, studentId, receivedAt])
+  @@index([organizationId, method, receivedAt])
+  @@index([organizationId, status, receivedAt])
+  @@index([invoiceId])
+  @@map("payments")
+}
+
+/// Splits one payment across one or more invoices. Sum of allocations plus any
+/// credit remainder always equals Payment.amountMinor.
+model PaymentAllocation {
+  id        String  @id @default(cuid())
+  paymentId String
+  payment   Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  invoiceId String
+  invoice   Invoice @relation(fields: [invoiceId], references: [id], onDelete: Restrict)
+
+  amountMinor BigInt
+  currency    String @db.VarChar(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([paymentId, invoiceId])
+  @@index([invoiceId])
+  @@map("payment_allocations")
+}
+
+enum RefundStatus {
+  PENDING_APPROVAL
+  APPROVED
+  REJECTED
+  PROCESSED
+  FAILED
+}
+
+model Refund {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  refundNumber String
+
+  paymentId String
+  payment   Payment  @relation(fields: [paymentId], references: [id], onDelete: Restrict)
+  invoiceId String?
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  amountMinor BigInt
+  currency    String        @db.VarChar(3)
+  method      PaymentMethod
+  reason      String
+  status      RefundStatus  @default(PENDING_APPROVAL)
+
+  requestedById   String?
+  requestedBy     User?     @relation("RefundRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedById    String?
+  approvedBy      User?     @relation("RefundApprovedBy", fields: [approvedById], references: [id], onDelete: SetNull)
+  approvedAt      DateTime? @db.Timestamptz(3)
+  rejectionReason String?
+  processedAt     DateTime? @db.Timestamptz(3)
+  providerRef     String?
+
+  idempotencyKey String @unique
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  ledgerEntries LedgerEntry[]
+  credits       StudentCredit[] @relation("CreditSourceRefund")
+
+  @@unique([organizationId, refundNumber])
+  @@index([organizationId, status, createdAt])
+  @@index([paymentId])
+  @@map("refunds")
+}
+
+enum StudentCreditSource {
+  OVERPAYMENT
+  REFUND_AS_CREDIT
+  GOODWILL_ADJUSTMENT
+  CANCELLED_INVOICE
+}
+
+enum StudentCreditStatus {
+  AVAILABLE
+  PARTIALLY_USED
+  EXHAUSTED
+  EXPIRED
+  REVOKED
+}
+
+/// Money the institution owes the student, held on account. Created by
+/// overpayment or by a refund issued as credit; consumed by CREDIT_NOTE
+/// payments against future invoices.
+model StudentCredit {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  source          StudentCreditSource
+  sourcePaymentId String?
+  sourcePayment   Payment?            @relation("CreditSourcePayment", fields: [sourcePaymentId], references: [id], onDelete: SetNull)
+  sourceRefundId  String?
+  sourceRefund    Refund?             @relation("CreditSourceRefund", fields: [sourceRefundId], references: [id], onDelete: SetNull)
+
+  amountMinor  BigInt
+  /// DERIVED CACHE: amountMinor minus everything consumed so far.
+  balanceMinor BigInt
+  currency     String              @db.VarChar(3)
+  status       StudentCreditStatus @default(AVAILABLE)
+  expiresAt    DateTime?           @db.Timestamptz(3)
+  note         String?
+
+  createdById String?
+  createdBy   User?   @relation("StudentCreditCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  fundedPayments Payment[]     @relation("CreditFundedPayments")
+  ledgerEntries  LedgerEntry[]
+
+  @@index([organizationId, studentId, status])
+  @@map("student_credits")
+}
+
+enum LedgerEntryType {
+  INVOICE_ISSUED
+  INVOICE_VOIDED
+  INVOICE_CANCELLED
+  DISCOUNT_APPLIED
+  PAYMENT_RECEIVED
+  PAYMENT_REVERSED
+  REFUND_ISSUED
+  CREDIT_ISSUED
+  CREDIT_APPLIED
+  CREDIT_EXPIRED
+  WRITE_OFF
+  ADJUSTMENT
+  LATE_FEE_CHARGED
+}
+
+enum LedgerDirection {
+  /// Increases what the student owes (revenue recognised / charge raised).
+  DEBIT
+  /// Decreases what the student owes (money in, discount, write-off).
+  CREDIT
+}
+
+/// APPEND-ONLY. No UPDATE, no DELETE -- the application layer has no code path
+/// that mutates a ledger row, and a database trigger added by migration
+/// enforces it. Corrections are new rows carrying `reversalOfId`.
+model LedgerEntry {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: SetNull)
+
+  entryType LedgerEntryType
+  direction LedgerDirection
+
+  studentId String?
+  student   Student?       @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  invoiceId String?
+  invoice   Invoice?       @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+  paymentId String?
+  payment   Payment?       @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+  refundId  String?
+  refund    Refund?        @relation(fields: [refundId], references: [id], onDelete: SetNull)
+  creditId  String?
+  credit    StudentCredit? @relation(fields: [creditId], references: [id], onDelete: SetNull)
+
+  amountMinor BigInt
+  currency    String   @db.VarChar(3)
+  /// Business date of the fact, which may differ from createdAt when a payment
+  /// is back-dated by an accountant.
+  occurredAt  DateTime @default(now()) @db.Timestamptz(3)
+  description String?
+
+  /// Set on a reversing entry; points at the row it cancels out.
+  reversalOfId String?      @unique
+  reversalOf   LedgerEntry? @relation("LedgerReversal", fields: [reversalOfId], references: [id], onDelete: SetNull)
+  reversedBy   LedgerEntry? @relation("LedgerReversal")
+
+  createdById String?
+  createdBy   User?   @relation("LedgerCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  metadata Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  financialAdjustments FinancialAdjustment[]
+
+  @@index([organizationId, occurredAt])
+  @@index([organizationId, branchId, occurredAt])
+  @@index([organizationId, entryType, occurredAt])
+  @@index([studentId, occurredAt])
+  @@index([invoiceId])
+  @@index([paymentId])
+  @@map("ledger_entries")
+}
+
+enum FinancialAdjustmentType {
+  WRITE_OFF
+  TUITION_CORRECTION
+  GOODWILL_CREDIT
+  LATE_FEE_WAIVER
+  BALANCE_CORRECTION
+}
+
+/// Deliberate, approved change to a balance. Always paired with the ledger row
+/// it produced, so no balance moves without a named approver and a reason.
+model FinancialAdjustment {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  type      FinancialAdjustmentType
+  studentId String?
+  student   Student?                @relation(fields: [studentId], references: [id], onDelete: SetNull)
+  invoiceId String?
+  invoice   Invoice?                @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  amountMinor BigInt
+  currency    String @db.VarChar(3)
+  reason      String
+
+  requestedById String?
+  requestedBy   User?    @relation("AdjustmentRequestedBy", fields: [requestedById], references: [id], onDelete: SetNull)
+  approvedById  String
+  approvedBy    User     @relation("AdjustmentApprovedBy", fields: [approvedById], references: [id], onDelete: Restrict)
+  approvedAt    DateTime @default(now()) @db.Timestamptz(3)
+
+  ledgerEntryId String?
+  ledgerEntry   LedgerEntry? @relation(fields: [ledgerEntryId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([organizationId, type, createdAt])
+  @@index([studentId])
+  @@index([invoiceId])
+  @@map("financial_adjustments")
+}
+
+enum PaymentScheduleStatus {
+  ACTIVE
+  COMPLETED
+  CANCELLED
+  DEFAULTED
+}
+
+model PaymentSchedule {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  name       String
+  totalMinor BigInt
+  currency   String                @db.VarChar(3)
+  status     PaymentScheduleStatus @default(ACTIVE)
+
+  createdById String?
+  createdBy   User?   @relation("PaymentScheduleCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  installments PaymentScheduleInstallment[]
+
+  @@index([organizationId, studentId, status])
+  @@map("payment_schedules")
+}
+
+enum InstallmentStatus {
+  SCHEDULED
+  INVOICED
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+model PaymentScheduleInstallment {
+  id         String          @id @default(cuid())
+  scheduleId String
+  schedule   PaymentSchedule @relation(fields: [scheduleId], references: [id], onDelete: Cascade)
+
+  sequence    Int
+  dueDate     DateTime          @db.Date
+  amountMinor BigInt
+  currency    String            @db.VarChar(3)
+  status      InstallmentStatus @default(SCHEDULED)
+
+  /// Set once this instalment has been turned into a real invoice.
+  invoiceId String?  @unique
+  invoice   Invoice? @relation(fields: [invoiceId], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([scheduleId, sequence])
+  @@index([status, dueDate])
+  @@map("payment_schedule_installments")
+}
+
+/// Which payment methods a branch accepts and how the UI should treat them.
+/// Secrets for online providers live in IntegrationConfig / env, never here.
+model PaymentMethodConfig {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  method            PaymentMethod
+  label             String
+  isActive          Boolean       @default(true)
+  requiresReference Boolean       @default(false)
+  providerKey       String?
+  /// Non-secret display/behaviour config only.
+  config            Json?
+  sequence          Int           @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([organizationId, branchId, method])
+  @@index([organizationId, isActive])
+  @@map("payment_method_configs")
+}
+
+model TaxRate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name      String
+  /// Parts-per-million (12% VAT == 120_000).
+  ratePpm   Int
+  isDefault Boolean @default(false)
+  isActive  Boolean @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([organizationId, name])
+  @@index([organizationId, isActive])
+  @@map("tax_rates")
+}
+
+/// Atomic counter behind generated document numbers (invoice, payment, refund,
+/// student code, application number...).
+///
+/// A `SELECT max(number) + 1` would race: two concurrent invoices would read the
+/// same maximum and then collide on the unique index -- or worse, with a
+/// different isolation level, both succeed. Incrementing a row with
+/// `UPDATE ... RETURNING` inside the caller's transaction makes allocation
+/// serialised by the row lock, so numbers are unique and monotonic per scope.
+///
+/// `period` partitions the sequence: "2026" for a yearly reset, or "-" when the
+/// sequence should run forever. Numbers may still show gaps when a transaction
+/// rolls back after allocating one, which is normal and preferable to reusing a
+/// number that appeared on a printed invoice.
+model DocumentCounter {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Document family, e.g. "invoice", "payment", "refund", "student", "application".
+  scope  String
+  /// Reset period, e.g. "2026" or "-" for never.
+  period String
+
+  nextValue Int @default(1)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([organizationId, scope, period])
+  @@map("document_counters")
+}

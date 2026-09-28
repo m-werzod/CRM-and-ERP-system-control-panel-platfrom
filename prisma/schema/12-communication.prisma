@@ -1,0 +1,324 @@
+// ---------------------------------------------------------------------------
+// Communication: notification templates, the notification outbox, delivery
+// preferences, announcements, and the provider-level send log.
+//
+// Message text lives in NotificationTemplate rows (per channel, per locale) and
+// never inline in application code. A domain event names a template key; the
+// notification engine renders it and enqueues one Notification row per
+// recipient/channel. Delivery is asynchronous: enqueueing is part of the
+// business transaction, sending is a Job, so a dead SMS gateway can never roll
+// back an attendance submission or a payment.
+// ---------------------------------------------------------------------------
+
+enum NotificationChannel {
+  IN_APP
+  EMAIL
+  SMS
+  TELEGRAM
+  WHATSAPP
+  PUSH
+}
+
+/// Domain events that can trigger notifications. Listeners subscribe by event;
+/// adding a channel for an existing event needs no code change, only a template.
+enum NotificationEvent {
+  STUDENT_ABSENT
+  STUDENT_LATE
+  ATTENDANCE_SUBMITTED
+  ATTENDANCE_CORRECTED
+  INVOICE_ISSUED
+  PAYMENT_RECEIVED
+  PAYMENT_OVERDUE
+  PAYMENT_REMINDER
+  REFUND_PROCESSED
+  DISCOUNT_APPROVAL_REQUESTED
+  EXAM_SCHEDULED
+  EXAM_RESULT_PUBLISHED
+  HOMEWORK_ASSIGNED
+  GRADE_UPDATED
+  ANNOUNCEMENT_PUBLISHED
+  SCHEDULE_CHANGED
+  LESSON_CANCELLED
+  NEW_LEAD_ASSIGNED
+  FOLLOW_UP_DUE
+  TRIAL_REMINDER
+  APPLICATION_STATUS_CHANGED
+  ENROLLMENT_CREATED
+  LEAVE_REQUEST_SUBMITTED
+  LEAVE_REQUEST_DECIDED
+  ACCOUNT_CREATED
+  PASSWORD_RESET
+  SECURITY_ALERT
+  CERTIFICATE_ISSUED
+  DAILY_ATTENDANCE_SUMMARY
+}
+
+model NotificationTemplate {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Stable key referenced from code, e.g. "payment.overdue.reminder".
+  key     String
+  event   NotificationEvent?
+  channel NotificationChannel
+  locale  Locale
+
+  subject   String?
+  /// Mustache-style body. `variables` documents the allowed placeholders so the
+  /// settings UI can validate a template before it is saved.
+  body      String
+  variables Json?
+
+  isActive Boolean @default(true)
+  version  Int     @default(1)
+
+  createdById String?
+  createdBy   User?   @relation("NotificationTemplateCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  notifications Notification[]
+
+  @@unique([organizationId, key, channel, locale])
+  @@index([organizationId, event, channel])
+  @@map("notification_templates")
+}
+
+enum NotificationStatus {
+  PENDING
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  READ
+  /// Suppressed by a recipient preference or a missing channel address.
+  SKIPPED
+}
+
+enum NotificationPriority {
+  LOW
+  NORMAL
+  HIGH
+  CRITICAL
+}
+
+model Notification {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /// Exactly one recipient pointer is set.
+  recipientUserId     String?
+  recipientUser       User?     @relation("NotificationUserRecipient", fields: [recipientUserId], references: [id], onDelete: Cascade)
+  recipientGuardianId String?
+  recipientGuardian   Guardian? @relation("NotificationGuardianRecipient", fields: [recipientGuardianId], references: [id], onDelete: Cascade)
+  recipientStudentId  String?
+  recipientStudent    Student?  @relation("NotificationStudentRecipient", fields: [recipientStudentId], references: [id], onDelete: Cascade)
+
+  event    NotificationEvent
+  channel  NotificationChannel
+  priority NotificationPriority @default(NORMAL)
+
+  templateId String?
+  template   NotificationTemplate? @relation(fields: [templateId], references: [id], onDelete: SetNull)
+
+  subject   String?
+  body      String
+  /// Deep link the in-app notification opens.
+  actionUrl String?
+
+  status      NotificationStatus @default(PENDING)
+  sentAt      DateTime?          @db.Timestamptz(3)
+  deliveredAt DateTime?          @db.Timestamptz(3)
+  readAt      DateTime?          @db.Timestamptz(3)
+  failedAt    DateTime?          @db.Timestamptz(3)
+  attempts    Int                @default(0)
+  error       String?
+  providerRef String?
+  skipReason  String?
+
+  /// Guarantees "one absence notice per student per lesson" even if the event
+  /// fires twice.
+  dedupeKey String? @unique
+
+  /// Rendering context, retained for support and re-send.
+  payload Json?
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@index([organizationId, status, createdAt])
+  @@index([recipientUserId, status, createdAt])
+  @@index([recipientGuardianId, status])
+  @@index([organizationId, event, createdAt])
+  @@index([status, channel, attempts])
+  @@map("notifications")
+}
+
+/// Opt-in / opt-out per recipient. A NULL `event` row is the channel-wide
+/// default; an event-specific row overrides it.
+model NotificationPreference {
+  id String @id @default(cuid())
+
+  userId     String?
+  user       User?     @relation("NotificationPreferenceUser", fields: [userId], references: [id], onDelete: Cascade)
+  guardianId String?
+  guardian   Guardian? @relation(fields: [guardianId], references: [id], onDelete: Cascade)
+
+  event   NotificationEvent?
+  channel NotificationChannel
+  enabled Boolean             @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([userId, event, channel])
+  @@unique([guardianId, event, channel])
+  @@index([guardianId])
+  @@map("notification_preferences")
+}
+
+enum AnnouncementAudience {
+  ORGANIZATION
+  BRANCH
+  GROUP
+  TEACHERS
+  STUDENTS
+  PARENTS
+  EMPLOYEES
+  ROLE
+}
+
+enum AnnouncementStatus {
+  DRAFT
+  SCHEDULED
+  PUBLISHED
+  EXPIRED
+  ARCHIVED
+}
+
+model Announcement {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String?
+  branch         Branch?      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  title    String
+  body     String
+  /// Primary audience. Additional / narrower targets live in
+  /// AnnouncementTarget, so one announcement can hit several groups at once.
+  audience AnnouncementAudience @default(ORGANIZATION)
+  status   AnnouncementStatus   @default(DRAFT)
+
+  pinned      Boolean   @default(false)
+  publishAt   DateTime? @db.Timestamptz(3)
+  publishedAt DateTime? @db.Timestamptz(3)
+  expiresAt   DateTime? @db.Timestamptz(3)
+
+  createdById String?
+  createdBy   User?   @relation("AnnouncementCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  targets   AnnouncementTarget[]
+  reads     AnnouncementRead[]
+  documents Document[]           @relation("AnnouncementDocuments")
+
+  @@index([organizationId, status, publishAt])
+  @@index([organizationId, branchId, status])
+  @@map("announcements")
+}
+
+model AnnouncementTarget {
+  id             String       @id @default(cuid())
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  groupId  String?
+  group    Group?  @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  roleId   String?
+  role     Role?   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@index([announcementId])
+  @@index([branchId])
+  @@index([groupId])
+  @@index([roleId])
+  @@map("announcement_targets")
+}
+
+model AnnouncementRead {
+  id             String       @id @default(cuid())
+  announcementId String
+  announcement   Announcement @relation(fields: [announcementId], references: [id], onDelete: Cascade)
+  userId         String
+  user           User         @relation("AnnouncementReadUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  readAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([announcementId, userId])
+  @@index([userId])
+  @@map("announcement_reads")
+}
+
+enum CommunicationDirection {
+  OUTBOUND
+  INBOUND
+}
+
+enum CommunicationStatus {
+  QUEUED
+  SENT
+  DELIVERED
+  FAILED
+  BOUNCED
+  REJECTED
+}
+
+/// Provider-level send log, separate from Notification. Notification is the
+/// business intent; this is the wire record -- which provider, which id, what it
+/// cost, why it bounced. Recipient addresses are stored masked.
+model CommunicationLog {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  channel   NotificationChannel
+  provider  String
+  direction CommunicationDirection @default(OUTBOUND)
+
+  /// e.g. "+9989*****4512" -- enough to reconcile, not a full contact dump.
+  toAddressMasked String
+  subject         String?
+  status          CommunicationStatus @default(QUEUED)
+  providerRef     String?
+  errorCode       String?
+  errorMessage    String?
+  segments        Int?
+  costMinor       BigInt?
+  currency        String?             @db.VarChar(3)
+
+  /// Loose back-pointer to what triggered the send.
+  relatedType String?
+  relatedId   String?
+
+  createdById String?
+  createdBy   User?   @relation("CommunicationLogCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  sentAt    DateTime? @db.Timestamptz(3)
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+
+  @@index([organizationId, channel, createdAt])
+  @@index([organizationId, status, createdAt])
+  @@index([providerRef])
+  @@index([relatedType, relatedId])
+  @@map("communication_logs")
+}

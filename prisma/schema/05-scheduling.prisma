@@ -1,0 +1,146 @@
+// ---------------------------------------------------------------------------
+// Scheduling: recurring timetable template (ScheduleSlot) + concrete
+// sessions (Lesson).
+//
+// ScheduleSlot is the weekly pattern ("Group A, Mondays 09:00-10:30, Room 201,
+// teacher X, effective from 1 Sep"). Lesson is the dated instance that
+// attendance, homework and grades actually hang off. Generating lessons from
+// slots is a use-case, not a view, so a cancelled or moved lesson is a real
+// record rather than a hole in a computed grid.
+//
+// Conflict rules enforced in src/server/services/scheduling:
+//   * a teacher cannot hold two overlapping lessons
+//   * a room cannot host two overlapping lessons
+//   * a group cannot sit in two overlapping lessons
+// Overlap is checked against both ScheduleSlot (pattern level) and Lesson
+// (instance level), because ad-hoc lessons bypass the pattern.
+// ---------------------------------------------------------------------------
+
+enum Weekday {
+  MONDAY
+  TUESDAY
+  WEDNESDAY
+  THURSDAY
+  FRIDAY
+  SATURDAY
+  SUNDAY
+}
+
+model ScheduleSlot {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  groupId   String
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  teacherId String?
+  teacher   Teacher? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  roomId    String?
+  room      Room?    @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
+  dayOfWeek   Weekday
+  /// Local wall-clock minutes from midnight in the branch timezone (e.g. 540
+  /// == 09:00). Storing minutes rather than a timestamp keeps the recurring
+  /// pattern free of DST ambiguity; concrete Lesson rows carry real instants.
+  startMinute Int
+  endMinute   Int
+
+  effectiveFrom DateTime  @db.Date
+  effectiveTo   DateTime? @db.Date
+  isActive      Boolean   @default(true)
+
+  createdById String?
+  createdBy   User?   @relation("ScheduleSlotCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  lessons Lesson[]
+
+  @@index([organizationId, branchId, dayOfWeek])
+  @@index([groupId, dayOfWeek, isActive])
+  @@index([teacherId, dayOfWeek, isActive])
+  @@index([roomId, dayOfWeek, isActive])
+  @@map("schedule_slots")
+}
+
+enum LessonStatus {
+  SCHEDULED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  RESCHEDULED
+}
+
+/// Attendance lifecycle for a lesson. Whether SUBMITTED is editable by the
+/// submitting teacher is an institution policy setting
+/// (`attendance.teacherEditWindowMinutes`), not a hard-coded rule.
+enum LessonAttendanceStatus {
+  NOT_REQUIRED
+  PENDING
+  SUBMITTED
+  APPROVED
+}
+
+model Lesson {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Cascade)
+
+  groupId   String
+  group     Group    @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  teacherId String?
+  teacher   Teacher? @relation(fields: [teacherId], references: [id], onDelete: SetNull)
+  roomId    String?
+  room      Room?    @relation(fields: [roomId], references: [id], onDelete: SetNull)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
+  scheduleSlotId String?       @map("schedule_slot_id")
+  scheduleSlot   ScheduleSlot? @relation(fields: [scheduleSlotId], references: [id], onDelete: SetNull)
+
+  /// Calendar date in the branch timezone, kept alongside the instants so
+  /// "today's lessons" is a single indexed equality test.
+  lessonDate DateTime @db.Date
+  startsAt   DateTime @db.Timestamptz(3)
+  endsAt     DateTime @db.Timestamptz(3)
+
+  topic              String?
+  lessonNumber       Int?
+  status             LessonStatus @default(SCHEDULED)
+  cancellationReason String?
+
+  attendanceStatus        LessonAttendanceStatus @default(PENDING)
+  attendanceSubmittedById String?
+  attendanceSubmittedBy   User?                  @relation("LessonAttendanceSubmittedBy", fields: [attendanceSubmittedById], references: [id], onDelete: SetNull)
+  attendanceSubmittedAt   DateTime?              @db.Timestamptz(3)
+  attendanceApprovedById  String?
+  attendanceApprovedBy    User?                  @relation("LessonAttendanceApprovedBy", fields: [attendanceApprovedById], references: [id], onDelete: SetNull)
+  attendanceApprovedAt    DateTime?              @db.Timestamptz(3)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  attendanceRecords     AttendanceRecord[]
+  homework              Homework[]
+  qrTokens              QrToken[]
+  faceRecognitionEvents FaceRecognitionEvent[]
+  trialLessons          TrialLesson[]
+
+  /// One lesson per group per start instant: blocks accidental double-generation.
+  @@unique([groupId, startsAt])
+  @@index([organizationId, branchId, lessonDate])
+  @@index([teacherId, lessonDate])
+  @@index([roomId, lessonDate])
+  @@index([groupId, lessonDate])
+  @@index([organizationId, lessonDate, attendanceStatus])
+  @@index([teacherId, startsAt, endsAt])
+  @@index([roomId, startsAt, endsAt])
+  @@map("lessons")
+}

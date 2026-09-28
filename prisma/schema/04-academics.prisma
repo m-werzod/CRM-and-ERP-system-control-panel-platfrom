@@ -1,0 +1,309 @@
+// ---------------------------------------------------------------------------
+// Academic structure: Subject / Program (course) / Group (class) and the
+// historical enrollment + teacher-assignment records.
+//
+// History rule: a student moving between groups closes the old Enrollment
+// (endDate + endReason) and opens a new one. Attendance, grades and invoices
+// stay attached to the enrollment they were created under, so past terms
+// remain reportable exactly as they happened.
+// ---------------------------------------------------------------------------
+
+model Subject {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name        String
+  code        String
+  category    String?
+  description String?
+  isActive    Boolean @default(true)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  programSubjects ProgramSubject[]
+  teacherSubjects TeacherSubject[]
+  groups          Group[]
+  scheduleSlots   ScheduleSlot[]
+  lessons         Lesson[]
+  exams           Exam[]
+  grades          Grade[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@map("subjects")
+}
+
+enum ProgramLevel {
+  BEGINNER
+  ELEMENTARY
+  PRE_INTERMEDIATE
+  INTERMEDIATE
+  UPPER_INTERMEDIATE
+  ADVANCED
+  PROFESSIONAL
+}
+
+/// The sellable academic product: what a lead is interested in, what an
+/// applicant applies for, and what a fee plan prices.
+model Program {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name                  String
+  code                  String
+  description           String?
+  level                 ProgramLevel @default(BEGINNER)
+  durationWeeks         Int          @default(12)
+  lessonsPerWeek        Int          @default(3)
+  lessonDurationMinutes Int          @default(90)
+
+  /// Catalogue price. A FeePlan may override it per branch or cohort.
+  defaultPriceMinor BigInt  @default(0)
+  currency          String  @default("UZS") @db.VarChar(3)
+  isActive          Boolean @default(true)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  subjects     ProgramSubject[]
+  groups       Group[]
+  feePlans     FeePlan[]
+  leads        Lead[]
+  applications Application[]
+  invoiceItems InvoiceItem[]
+  exams        Exam[]
+  certificates Certificate[]
+
+  @@unique([organizationId, code])
+  @@index([organizationId, isActive])
+  @@map("programs")
+}
+
+model ProgramSubject {
+  id        String  @id @default(cuid())
+  programId String
+  program   Program @relation(fields: [programId], references: [id], onDelete: Cascade)
+  subjectId String
+  subject   Subject @relation(fields: [subjectId], references: [id], onDelete: Cascade)
+
+  hoursPerWeek Int @default(3)
+  sequence     Int @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([programId, subjectId])
+  @@index([subjectId])
+  @@map("program_subjects")
+}
+
+enum GroupStatus {
+  PLANNED
+  ENROLLING
+  ACTIVE
+  PAUSED
+  COMPLETED
+  CANCELLED
+}
+
+model Group {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branchId       String
+  branch         Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+
+  name String
+  code String
+
+  programId String?
+  program   Program? @relation(fields: [programId], references: [id], onDelete: SetNull)
+  subjectId String?
+  subject   Subject? @relation(fields: [subjectId], references: [id], onDelete: SetNull)
+
+  /// Denormalised "current" teachers for fast listing and the conflict check.
+  /// The authoritative, dated assignment history lives in GroupTeacher.
+  primaryTeacherId   String?
+  primaryTeacher     Teacher? @relation("GroupPrimaryTeacher", fields: [primaryTeacherId], references: [id], onDelete: SetNull)
+  assistantTeacherId String?
+  assistantTeacher   Teacher? @relation("GroupAssistantTeacher", fields: [assistantTeacherId], references: [id], onDelete: SetNull)
+
+  roomId String?
+  room   Room?   @relation(fields: [roomId], references: [id], onDelete: SetNull)
+
+  academicYearId String?
+  academicYear   AcademicYear? @relation(fields: [academicYearId], references: [id], onDelete: SetNull)
+  termId         String?
+  term           Term?         @relation(fields: [termId], references: [id], onDelete: SetNull)
+
+  level     ProgramLevel?
+  capacity  Int           @default(15)
+  startDate DateTime?     @db.Date
+  endDate   DateTime?     @db.Date
+  status    GroupStatus   @default(PLANNED)
+  notes     String?
+
+  createdById String?
+  createdBy   User?   @relation("GroupCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime  @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime  @updatedAt @db.Timestamptz(3)
+  deletedAt DateTime? @db.Timestamptz(3)
+
+  teacherAssignments  GroupTeacher[]
+  enrollments         Enrollment[]
+  scheduleSlots       ScheduleSlot[]
+  lessons             Lesson[]
+  homework            Homework[]
+  exams               Exam[]
+  grades              Grade[]
+  studentFeePlans     StudentFeePlan[]
+  invoiceItems        InvoiceItem[]
+  trialLessons        TrialLesson[]
+  announcementTargets AnnouncementTarget[]
+  documents           Document[]           @relation("GroupDocuments")
+
+  @@unique([organizationId, code])
+  @@index([organizationId, branchId, status])
+  @@index([organizationId, primaryTeacherId])
+  @@index([organizationId, programId])
+  @@map("groups")
+}
+
+enum GroupTeacherRole {
+  PRIMARY
+  ASSISTANT
+  SUBSTITUTE
+}
+
+/// Dated teacher-to-group assignment history. Never updated in place when a
+/// teacher changes: close the row and open a new one.
+model GroupTeacher {
+  id        String  @id @default(cuid())
+  groupId   String
+  group     Group   @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  teacherId String
+  teacher   Teacher @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+
+  role      GroupTeacherRole @default(PRIMARY)
+  startDate DateTime         @db.Date
+  endDate   DateTime?        @db.Date
+  endReason String?
+
+  assignedById String?
+  assignedBy   User?   @relation("GroupTeacherAssignedBy", fields: [assignedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  @@unique([groupId, teacherId, role, startDate])
+  @@index([teacherId, endDate])
+  @@index([groupId, endDate])
+  @@map("group_teachers")
+}
+
+enum EnrollmentStatus {
+  ACTIVE
+  COMPLETED
+  TRANSFERRED
+  WITHDRAWN
+  SUSPENDED
+}
+
+enum EnrollmentEndReason {
+  COMPLETED
+  TRANSFERRED_OUT
+  WITHDRAWN
+  NON_PAYMENT
+  DISCIPLINARY
+  OTHER
+}
+
+/// Historical student-in-group record. A migration adds a partial unique index
+/// guaranteeing at most one open (endDate IS NULL) enrollment per
+/// (studentId, groupId).
+model Enrollment {
+  id        String  @id @default(cuid())
+  studentId String
+  student   Student @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  groupId   String
+  group     Group   @relation(fields: [groupId], references: [id], onDelete: Restrict)
+
+  status    EnrollmentStatus     @default(ACTIVE)
+  startDate DateTime             @db.Date
+  endDate   DateTime?            @db.Date
+  endReason EnrollmentEndReason?
+  endNote   String?
+
+  /// Set when a transfer closes this enrollment, linking to its successor.
+  transferredToId String?     @unique
+  transferredTo   Enrollment? @relation("EnrollmentTransfer", fields: [transferredToId], references: [id], onDelete: SetNull)
+  transferredFrom Enrollment? @relation("EnrollmentTransfer")
+
+  createdById String?
+  createdBy   User?   @relation("EnrollmentCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  attendanceRecords AttendanceRecord[]
+
+  @@unique([studentId, groupId, startDate])
+  @@index([groupId, status])
+  @@index([studentId, status])
+  @@index([groupId, endDate])
+  @@map("enrollments")
+}
+
+enum GradingScaleKind {
+  NUMERIC
+  PERCENTAGE
+  LETTER
+  PASS_FAIL
+}
+
+model GradingScale {
+  id             String       @id @default(cuid())
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  name      String
+  kind      GradingScaleKind @default(PERCENTAGE)
+  isDefault Boolean          @default(false)
+  isActive  Boolean          @default(true)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+  updatedAt DateTime @updatedAt @db.Timestamptz(3)
+
+  bands GradingScaleBand[]
+  exams Exam[]
+
+  @@unique([organizationId, name])
+  @@index([organizationId, isDefault])
+  @@map("grading_scales")
+}
+
+model GradingScaleBand {
+  id             String       @id @default(cuid())
+  gradingScaleId String
+  gradingScale   GradingScale @relation(fields: [gradingScaleId], references: [id], onDelete: Cascade)
+
+  label         String
+  /// Inclusive lower / upper bound of the band, in parts-per-million of the
+  /// maximum score (50% == 500_000 ppm). Integers keep boundaries exact.
+  minPercentPpm Int
+  maxPercentPpm Int
+  gpaPoints     Float?
+  isPass        Boolean @default(true)
+  sequence      Int     @default(0)
+
+  createdAt DateTime @default(now()) @db.Timestamptz(3)
+
+  @@unique([gradingScaleId, label])
+  @@index([gradingScaleId, minPercentPpm])
+  @@map("grading_scale_bands")
+}
