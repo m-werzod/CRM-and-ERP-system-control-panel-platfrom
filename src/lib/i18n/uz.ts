@@ -12,6 +12,10 @@ import type { Dictionary } from './types';
 
 export const uz: Dictionary = {
   common: {
+    noMatches: {
+      title: 'Filtrlarga mos natija topilmadi',
+      description: 'Filtrlarni ozgartiring yoki hammasini korish uchun tozalang.',
+    },
     appName: 'EduCRM',
     save: 'Saqlash',
     saveChanges: "O'zgarishlarni saqlash",
@@ -557,6 +561,11 @@ export const uz: Dictionary = {
   },
 
   groups: {
+    emptyFiltered: {
+      title: 'Filtrlarga mos guruh topilmadi',
+      description: 'Boshqa holat, daraja yoki dasturni tanlang.',
+      action: 'Filtrlarni tozalash',
+    },
     title: 'Guruhlar',
     subtitle: "Guruhlar, ularning o'qituvchilari, jadvali va ro'yxati.",
     create: 'Guruh yaratish',
@@ -1263,6 +1272,11 @@ export const uz: Dictionary = {
   },
 
   employees: {
+    emptyFiltered: {
+      title: 'Filtrlarga mos xodim topilmadi',
+      description: 'Boshqa holat, bolim yoki filialni tanlang.',
+      action: 'Filtrlarni tozalash',
+    },
     title: 'Xodimlar',
     subtitle: "O'qituvchilar va xodimlar, ularning rollari va shartnomalari.",
     create: "Xodim qo'shish",
@@ -1863,6 +1877,7 @@ export const uz: Dictionary = {
   },
 
   search: {
+    truncated: "Faqat eng mos natijalar ko'rsatildi — qolganini ko'rish uchun so'rovni aniqlashtiring.",
     title: 'Qidirish',
     placeholder: "O'quvchi, guruh, hisob-faktura qidirish...",
     hint: 'Kamida {count} belgi kiriting.',

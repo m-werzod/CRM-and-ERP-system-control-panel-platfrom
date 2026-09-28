@@ -18,6 +18,10 @@
  */
 export const en = {
   common: {
+    noMatches: {
+      title: 'Nothing matches these filters',
+      description: 'Try different filters, or clear them to see everything.',
+    },
     appName: 'EduCRM',
     save: 'Save',
     saveChanges: 'Save changes',
@@ -559,6 +563,11 @@ export const en = {
   },
 
   groups: {
+    emptyFiltered: {
+      title: 'No group matches these filters',
+      description: 'Try another status, level or program.',
+      action: 'Clear filters',
+    },
     title: 'Groups',
     subtitle: 'Classes, their teachers, their timetable and their roster.',
     create: 'Create group',
@@ -1256,6 +1265,11 @@ export const en = {
   },
 
   employees: {
+    emptyFiltered: {
+      title: 'No employee matches these filters',
+      description: 'Try another status, department or branch.',
+      action: 'Clear filters',
+    },
     title: 'Employees',
     subtitle: 'Teachers and staff, their roles and their contracts.',
     create: 'Add employee',
@@ -1851,6 +1865,7 @@ export const en = {
   },
 
   search: {
+    truncated: 'Showing the closest matches only — narrow the search to see the rest.',
     title: 'Search',
     placeholder: 'Search students, groups, invoices...',
     hint: 'Type at least {count} characters.',

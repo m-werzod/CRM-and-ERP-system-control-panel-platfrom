@@ -16,6 +16,10 @@ import type { Dictionary } from './types';
 
 export const ru: Dictionary = {
   common: {
+    noMatches: {
+      title: 'Ничего не найдено по этим фильтрам',
+      description: 'Измените фильтры или сбросьте их, чтобы увидеть всё.',
+    },
     appName: 'EduCRM',
     save: 'Сохранить',
     saveChanges: 'Сохранить изменения',
@@ -561,6 +565,11 @@ export const ru: Dictionary = {
   },
 
   groups: {
+    emptyFiltered: {
+      title: 'Ни одна группа не соответствует фильтрам',
+      description: 'Попробуйте другой статус, уровень или программу.',
+      action: 'Сбросить фильтры',
+    },
     title: 'Группы',
     subtitle: 'Группы, их преподаватели, расписание и состав.',
     create: 'Создать группу',
@@ -1266,6 +1275,11 @@ export const ru: Dictionary = {
   },
 
   employees: {
+    emptyFiltered: {
+      title: 'Ни один сотрудник не соответствует фильтрам',
+      description: 'Попробуйте другой статус, отдел или филиал.',
+      action: 'Сбросить фильтры',
+    },
     title: 'Сотрудники',
     subtitle: 'Преподаватели и персонал, их роли и договоры.',
     create: 'Добавить сотрудника',
@@ -1867,6 +1881,7 @@ export const ru: Dictionary = {
   },
 
   search: {
+    truncated: 'Показаны только ближайшие совпадения — уточните запрос, чтобы увидеть остальные.',
     title: 'Поиск',
     placeholder: 'Поиск студентов, групп, счетов...',
     hint: 'Введите не менее {count} символов.',

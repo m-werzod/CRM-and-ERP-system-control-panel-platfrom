@@ -18,7 +18,19 @@ import { cn } from '@/lib/cn';
  * meantime: add a route here the moment its page lands and the item appears by
  * itself, still gated by the permission the tree already declares.
  */
-const BUILT_ROUTES: ReadonlySet<string> = new Set(['/dashboard', '/settings']);
+const BUILT_ROUTES: ReadonlySet<string> = new Set([
+  '/dashboard',
+  '/crm/leads',
+  '/students',
+  '/guardians',
+  '/academics/groups',
+  '/academics/exams',
+  '/hr/employees',
+  '/hr/leave',
+  '/hr/payroll',
+  '/settings',
+  '/settings/users',
+]);
 
 export interface AppShellProps {
   readonly displayName: string;
