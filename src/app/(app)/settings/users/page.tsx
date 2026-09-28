@@ -23,7 +23,11 @@ import {
 } from '@/lib/list-params';
 import { requireContext } from '@/server/auth/context';
 import { viewerTranslator } from '@/server/i18n';
+import { can } from '@/server/rbac/access';
+import { listBranches } from '@/server/services/admin/organization';
+import { listRoles } from '@/server/services/admin/roles';
 import { listUsers } from '@/server/services/admin/users';
+import { AddUserPanel, ResetPasswordButton } from './user-admin';
 
 const STATUSES = [
   'INVITED',
@@ -60,9 +64,38 @@ export default async function UsersPage({
 
   const filtered = hasActiveFilters(params, [...FILTER_KEYS, 'q']);
 
+  // Both lists are behind their own permissions, so they are only asked for when
+  // the caller holds them -- calling regardless would turn "cannot add users"
+  // into a 403 page instead of a missing button.
+  const mayCreate = can(ctx, 'users.create') && can(ctx, 'roles.view');
+  const mayReset = can(ctx, 'users.resetPassword');
+
+  const [roles, branches] = mayCreate
+    ? await Promise.all([
+        listRoles(ctx),
+        can(ctx, 'settings.view') ? listBranches(ctx) : Promise.resolve([]),
+      ])
+    : [[], []];
+
   return (
     <>
-      <PageHeader title={t.t('users.title')} description={t.t('users.subtitle')} />
+      <PageHeader
+        title={t.t('users.title')}
+        description={t.t('users.subtitle')}
+        actions={
+          mayCreate ? (
+            <AddUserPanel
+              roles={roles.map((role) => ({
+                id: role.id,
+                name: role.name,
+                key: role.key,
+                editableByCaller: role.editableByCaller,
+              }))}
+              branches={branches.map((branch) => ({ id: branch.id, name: branch.name }))}
+            />
+          ) : undefined
+        }
+      />
 
       <ListToolbar>
         <ListSearch placeholder={t.t('users.searchPlaceholder')} />
@@ -91,6 +124,11 @@ export default async function UsersPage({
                 <TH>{t.t('users.fields.branches')}</TH>
                 <TH>{t.t('users.fields.lastLoginAt')}</TH>
                 <TH>{t.t('users.fields.status')}</TH>
+                {mayReset && (
+                  <TH>
+                    <span className="sr-only">{t.t('common.actions')}</span>
+                  </TH>
+                )}
               </TR>
             </THead>
             <TBody>
@@ -135,6 +173,11 @@ export default async function UsersPage({
                       )}
                     </span>
                   </TD>
+                  {mayReset && (
+                    <TD>
+                      <ResetPasswordButton userId={row.id} name={row.fullName} />
+                    </TD>
+                  )}
                 </TR>
               ))}
             </TBody>

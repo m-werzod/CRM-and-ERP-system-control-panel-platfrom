@@ -1740,9 +1740,13 @@ export const en = {
   },
 
   users: {
+    temporaryPassword: 'Temporary password',
+    temporaryPasswordHint: 'Shown once. Copy it now and hand it over — it cannot be retrieved again, only replaced by another reset.',
+    createdWithPassword: '{name} can now sign in.',
+    confirmReset: 'Reset the password',
     title: 'Users',
     subtitle: 'Who can sign in, and what they may do.',
-    create: 'Invite user',
+    create: 'Add user',
     edit: 'Edit user',
     detail: 'User',
     searchPlaceholder: 'Search by name or email',
@@ -1771,8 +1775,9 @@ export const en = {
     assignBranch: 'Grant branch access',
     resetPassword: 'Reset password',
     resetPasswordTitle: 'Reset the password of {name}?',
-    resetPasswordBody: 'Their current password stops working and a reset link is emailed to them.',
-    resetPasswordDone: 'A reset link was sent.',
+    resetPasswordBody:
+      'Their current password stops working and every session of theirs ends immediately. You are shown a temporary password to pass on.',
+    resetPasswordDone: 'A temporary password was issued.',
     deactivate: 'Deactivate',
     deactivateTitle: 'Deactivate {name}?',
     deactivateBody: 'They can no longer sign in and their sessions end immediately. The record is kept.',
@@ -1886,6 +1891,14 @@ export const en = {
     errors: {
       load: 'The search could not be completed.',
     },
+  },
+
+  theme: {
+    label: 'Theme',
+    light: 'Light',
+    dark: 'Dark',
+    system: 'Match system',
+    toggle: 'Switch theme',
   },
 
   validation: {

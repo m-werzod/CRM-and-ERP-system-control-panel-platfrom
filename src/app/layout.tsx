@@ -1,5 +1,6 @@
 import type { Metadata, Viewport } from 'next';
 import type { ReactNode } from 'react';
+import { ThemeProvider } from '@/components/theme/theme-provider';
 import './globals.css';
 
 export const metadata: Metadata = {
@@ -24,8 +25,13 @@ export const viewport: Viewport = {
 
 export default function RootLayout({ children }: { children: ReactNode }) {
   return (
+    // `suppressHydrationWarning` is required, not cosmetic: next-themes writes
+    // `data-theme` on this element before React hydrates, so the server and
+    // client markup differ here by design.
     <html lang="en" suppressHydrationWarning>
-      <body>{children}</body>
+      <body>
+        <ThemeProvider>{children}</ThemeProvider>
+      </body>
     </html>
   );
 }

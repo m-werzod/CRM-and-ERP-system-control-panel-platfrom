@@ -1750,9 +1750,13 @@ export const uz: Dictionary = {
   },
 
   users: {
+    temporaryPassword: 'Vaqtinchalik parol',
+    temporaryPasswordHint: 'Bir marta koʻrsatiladi. Hozir nusxalab oling — uni qayta koʻrib boʻlmaydi, faqat yangisini yaratish mumkin.',
+    createdWithPassword: '{name} endi tizimga kira oladi.',
+    confirmReset: 'Parolni tiklash',
     title: 'Foydalanuvchilar',
     subtitle: 'Kim tizimga kirishi va nima qilishi mumkin.',
-    create: 'Foydalanuvchi taklif qilish',
+    create: 'Foydalanuvchi qoʻshish',
     edit: 'Foydalanuvchini tahrirlash',
     detail: 'Foydalanuvchi',
     searchPlaceholder: 'Ism yoki elektron pochta bo‘yicha qidirish',
@@ -1774,7 +1778,7 @@ export const uz: Dictionary = {
       mustChangePassword: "Parolni o'zgartirishi shart",
     },
     invite: 'Taklif yuborish',
-    invited: '{email} ga taklif yuborildi.',
+    invited: '{email} hisobi yaratildi.',
     resendInvite: 'Taklifni qayta yuborish',
     assignRole: 'Rol berish',
     removeRole: 'Rolni olib tashlash',
@@ -1782,8 +1786,8 @@ export const uz: Dictionary = {
     resetPassword: 'Parolni tiklash',
     resetPasswordTitle: '{name} ning paroli tiklansinmi?',
     resetPasswordBody:
-      "Hozirgi paroli ishlamay qoladi va unga tiklash havolasi yuboriladi.",
-    resetPasswordDone: 'Tiklash havolasi yuborildi.',
+      "Hozirgi paroli ishlamay qoladi va barcha seanslari darhol tugaydi. Sizga unga berish uchun vaqtinchalik parol koʻrsatiladi.",
+    resetPasswordDone: 'Vaqtinchalik parol berildi.',
     deactivate: 'Faolsizlantirish',
     deactivateTitle: '{name} faolsizlantirilsinmi?',
     deactivateBody:
@@ -1898,6 +1902,14 @@ export const uz: Dictionary = {
     errors: {
       load: "Qidiruvni bajarish imkoni bo'lmadi.",
     },
+  },
+
+  theme: {
+    label: 'Mavzu',
+    light: 'Yorugʻ',
+    dark: 'Qorongʻi',
+    system: 'Tizim boʻyicha',
+    toggle: 'Mavzuni almashtirish',
   },
 
   validation: {

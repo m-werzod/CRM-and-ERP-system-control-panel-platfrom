@@ -1754,9 +1754,13 @@ export const ru: Dictionary = {
   },
 
   users: {
+    temporaryPassword: 'Временный пароль',
+    temporaryPasswordHint: 'Показывается один раз. Скопируйте его сейчас — восстановить нельзя, только сбросить заново.',
+    createdWithPassword: '{name} теперь может войти.',
+    confirmReset: 'Сбросить пароль',
     title: 'Пользователи',
     subtitle: 'Кто может входить в систему и что ему разрешено.',
-    create: 'Пригласить пользователя',
+    create: 'Добавить пользователя',
     edit: 'Изменить пользователя',
     detail: 'Пользователь',
     searchPlaceholder: 'Поиск по имени или эл. почте',
@@ -1778,7 +1782,7 @@ export const ru: Dictionary = {
       mustChangePassword: 'Должен сменить пароль',
     },
     invite: 'Отправить приглашение',
-    invited: 'Приглашение отправлено на {email}.',
+    invited: 'Учётная запись {email} создана.',
     resendInvite: 'Отправить приглашение снова',
     assignRole: 'Назначить роль',
     removeRole: 'Убрать роль',
@@ -1786,8 +1790,8 @@ export const ru: Dictionary = {
     resetPassword: 'Сбросить пароль',
     resetPasswordTitle: 'Сбросить пароль пользователя {name}?',
     resetPasswordBody:
-      'Текущий пароль перестанет работать, а ссылка для сброса придёт ему на почту.',
-    resetPasswordDone: 'Ссылка для сброса отправлена.',
+      'Текущий пароль перестанет работать, и все его сеансы немедленно завершатся. Вам будет показан временный пароль, который нужно передать ему.',
+    resetPasswordDone: 'Временный пароль выдан.',
     deactivate: 'Деактивировать',
     deactivateTitle: 'Деактивировать {name}?',
     deactivateBody:
@@ -1902,6 +1906,14 @@ export const ru: Dictionary = {
     errors: {
       load: 'Не удалось выполнить поиск.',
     },
+  },
+
+  theme: {
+    label: 'Тема',
+    light: 'Светлая',
+    dark: 'Тёмная',
+    system: 'Как в системе',
+    toggle: 'Сменить тему',
   },
 
   validation: {

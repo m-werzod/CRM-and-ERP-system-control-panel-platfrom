@@ -344,24 +344,52 @@ export function makePerson(random: Random): PersonName {
 }
 
 /**
- * The documented development logins. Every account shares one password, which is
- * acceptable ONLY because these accounts exist solely in a local database seeded
- * with fabricated data. `env.ts` refuses to boot production with a placeholder
+ * Fallback password for the seeded accounts that are not handed to anyone by
+ * name. Acceptable ONLY because these accounts exist solely in a local database
+ * of fabricated data: `env.ts` refuses to boot production with a placeholder
  * secret, and the seed refuses to run against NODE_ENV=production.
  *
  * Deliberately BELOW `passwordSchema`'s ten-character floor. The seed hashes it
  * directly, so the schema never sees it -- but `changeOwnPassword` does, which
- * means the first thing an administrator does in Settings is replace it with
- * something the policy actually accepts. A weak demo password that cannot be
- * re-entered through the UI is self-limiting; a weak one that can is a habit.
+ * means the first thing anyone does in Settings is replace it with something the
+ * policy actually accepts. A weak demo password that cannot be re-entered
+ * through the UI is self-limiting; a weak one that can is a habit.
  */
-export const DEV_PASSWORD = 'Admin123';
+export const DEV_PASSWORD = 'Demo-Password-2026';
 
-export const DEV_ACCOUNTS = [
+export interface DevAccount {
+  readonly role: string;
+  readonly email: string;
+  readonly label: string;
+  /** Overrides DEV_PASSWORD. Set only for the logins handed out by name. */
+  readonly password?: string;
+}
+
+/**
+ * The documented development logins.
+ *
+ * Two carry their own password because a demo starts from exactly two seats:
+ * the super administrator who provisions everyone else, and a teacher who sees
+ * only their own classes. Giving the rest a different shared password keeps
+ * "Admin123 is the super administrator" true rather than "Admin123 is
+ * everyone", which is the whole point of handing them out separately.
+ */
+export const DEV_ACCOUNTS: readonly DevAccount[] = [
   // Not an email address, and that is deliberate: `login()` matches on the
   // `email` column after lowercasing, so a bare handle is a valid credential and
   // "Admin" is what an operator expects to type on day one.
-  { role: 'SUPER_ADMIN', email: 'admin', label: 'The main administrator -- sign in as "Admin"' },
+  {
+    role: 'SUPER_ADMIN',
+    email: 'admin',
+    password: 'Admin123',
+    label: 'The main administrator -- provisions staff, teachers and students',
+  },
+  {
+    role: 'TEACHER',
+    email: 'teacher',
+    password: 'admin321',
+    label: 'A teacher -- own classes, own register, own grades',
+  },
   { role: 'SUPER_ADMIN', email: 'superadmin@example.test', label: 'Full control, including roles and integrations' },
   { role: 'ADMIN', email: 'admin@example.test', label: 'Day-to-day operations across every branch' },
   { role: 'BRANCH_ADMIN', email: 'branch.chilonzor@example.test', label: 'Chilonzor campus only' },

@@ -240,10 +240,22 @@ async function main(): Promise<void> {
   // nothing but half a second.
   // -------------------------------------------------------------------------
   done = step('creating users and employees');
-  const sharedHash = await hashPassword(DEV_PASSWORD);
+  // One Argon2id hash per DISTINCT password, not per account. The parameters are
+  // tuned to cost ~15ms, so hashing thirty identical demo passwords separately
+  // would add half a second to every seed and prove nothing.
+  const hashCache = new Map<string, string>();
+  const hashFor = async (password: string): Promise<string> => {
+    const cached = hashCache.get(password);
+    if (cached) return cached;
+    const hash = await hashPassword(password);
+    hashCache.set(password, hash);
+    return hash;
+  };
+  const sharedHash = await hashFor(DEV_PASSWORD);
 
   interface CreateUserSpec {
     email: string;
+    passwordHash: string;
     roleKey: string;
     firstName: string;
     lastName: string;
@@ -274,6 +286,7 @@ async function main(): Promise<void> {
     const person = makePerson(random);
     userSpecs.push({
       email: account.email,
+      passwordHash: await hashFor(account.password ?? DEV_PASSWORD),
       roleKey: account.role,
       firstName: person.firstName,
       lastName: person.lastName,
@@ -307,6 +320,7 @@ async function main(): Promise<void> {
       const branchId = branchIds[staffIndex % branchIds.length]!;
       userSpecs.push({
         email: makeEmail(person.firstName, person.lastName, staffIndex),
+        passwordHash: sharedHash,
         roleKey: group.roleKey,
         firstName: person.firstName,
         lastName: person.lastName,
@@ -350,7 +364,7 @@ async function main(): Promise<void> {
         organizationId,
         email: spec.email,
         username: uniqueUsername(spec.email),
-        passwordHash: sharedHash,
+        passwordHash: spec.passwordHash,
         firstName: spec.firstName,
         lastName: spec.lastName,
         phone: makePhone(random),
@@ -1130,9 +1144,12 @@ async function report(_random: Random): Promise<void> {
     console.log(`    ${String(value).padStart(6)}  ${label}`);
   }
 
-  console.log('\n  Development logins (password for all: ' + DEV_PASSWORD + ')');
+  console.log('\n  Development logins');
   for (const account of DEV_ACCOUNTS) {
-    console.log(`    ${account.email.padEnd(34)} ${account.role.padEnd(15)} ${account.label}`);
+    const password = account.password ?? DEV_PASSWORD;
+    console.log(
+      `    ${account.email.padEnd(30)} ${password.padEnd(20)} ${account.role.padEnd(15)} ${account.label}`,
+    );
   }
   console.log(
     '\n  All names, phone numbers and addresses are fabricated. Emails use the\n' +

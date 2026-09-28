@@ -6,6 +6,7 @@ import { usePathname, useRouter } from 'next/navigation';
 import { useState, type ReactNode } from 'react';
 import { useTranslator } from '@/components/i18n/provider';
 import { isNavItemActive, visibleNavigation } from '@/components/layout/navigation';
+import { ThemeToggle } from '@/components/theme/theme-toggle';
 import { Button } from '@/components/ui/button';
 import { apiPost } from '@/lib/api-client';
 import { cn } from '@/lib/cn';
@@ -139,6 +140,9 @@ export function AppShell({ displayName, email, permissions, children }: AppShell
           </nav>
 
           <div className="mt-4 border-t border-[var(--color-border)] px-2 pt-3">
+            <div className="mb-2.5">
+              <ThemeToggle />
+            </div>
             <p className="truncate text-xs font-medium">{displayName}</p>
             <p className="truncate text-2xs text-[var(--color-text-subtle)]">{email}</p>
             <Button
