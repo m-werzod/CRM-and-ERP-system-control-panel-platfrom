@@ -21,6 +21,7 @@ import {
 } from '@/components/ui/table';
 import type { Gender, StudentStatus } from '@/generated/prisma/client';
 import {
+  boolOf,
   enumOne,
   hasActiveFilters,
   one,
@@ -31,7 +32,10 @@ import {
 } from '@/lib/list-params';
 import { requireContext } from '@/server/auth/context';
 import { viewerTranslator } from '@/server/i18n';
+import { can } from '@/server/rbac/access';
+import { listBranches } from '@/server/services/admin/organization';
 import { listStudents } from '@/server/services/students/students';
+import { AddStudentPanel, ArchiveStudentButton } from './student-actions';
 
 const STATUSES = [
   'PROSPECT',
@@ -44,7 +48,7 @@ const STATUSES = [
 
 const GENDERS = ['MALE', 'FEMALE', 'OTHER', 'UNSPECIFIED'] as const satisfies readonly Gender[];
 
-const FILTER_KEYS = ['status', 'gender', 'groupId', 'programId'] as const;
+const FILTER_KEYS = ['status', 'gender', 'groupId', 'programId', 'archived'] as const;
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await viewerTranslator(await requireContext());
@@ -73,13 +77,25 @@ export default async function StudentsPage({
     gender: enumOne(params, 'gender', GENDERS),
     groupId: one(params, 'groupId'),
     programId: one(params, 'programId'),
+    includeArchived: boolOf(params, 'archived') === true ? true : undefined,
   });
 
   const filtered = hasActiveFilters(params, [...FILTER_KEYS, 'q']);
 
+  const mayCreate = can(ctx, 'students.create');
+  const mayArchive = can(ctx, 'students.delete');
+  // Only asked for when there is a form that needs it, and only when the caller
+  // may read them at all.
+  const branchRows = mayCreate && can(ctx, 'settings.view') ? await listBranches(ctx) : [];
+  const branches = branchRows.map((branch) => ({ id: branch.id, name: branch.name }));
+
   return (
     <>
-      <PageHeader title={t.t('students.title')} description={t.t('students.subtitle')} />
+      <PageHeader
+        title={t.t('students.title')}
+        description={t.t('students.subtitle')}
+        actions={mayCreate ? <AddStudentPanel branches={branches} /> : undefined}
+      />
 
       <ListToolbar>
         <ListSearch placeholder={t.t('students.searchPlaceholder')} />
@@ -95,6 +111,11 @@ export default async function StudentsPage({
           name="gender"
           label={t.t('students.fields.gender')}
           options={GENDERS.map((value) => ({ value, label: t.t(`enums.Gender.${value}`) }))}
+        />
+        <ListFilter
+          name="archived"
+          label={t.t('common.archive')}
+          options={[{ value: 'true', label: t.t('common.archive') }]}
         />
         {filtered && <ClearFilters keys={FILTER_KEYS} />}
         <span className="ml-auto text-2xs text-[var(--color-text-subtle)]">
@@ -131,6 +152,11 @@ export default async function StudentsPage({
                 <TH>{t.t('students.fields.groups')}</TH>
                 <TH>{t.t('students.fields.branch')}</TH>
                 <TH>{t.t('students.fields.status')}</TH>
+                {mayArchive && (
+                  <TH>
+                    <span className="sr-only">{t.t('common.actions')}</span>
+                  </TH>
+                )}
               </TR>
             </THead>
             <TBody>
@@ -168,6 +194,15 @@ export default async function StudentsPage({
                   <TD nowrap>
                     <StatusBadge status={row.status} label={t.t(`enums.StudentStatus.${row.status}`)} />
                   </TD>
+                  {mayArchive && (
+                    <TD>
+                      <ArchiveStudentButton
+                        studentId={row.id}
+                        name={row.fullName}
+                        isArchived={row.isArchived}
+                      />
+                    </TD>
+                  )}
                 </TR>
               ))}
             </TBody>

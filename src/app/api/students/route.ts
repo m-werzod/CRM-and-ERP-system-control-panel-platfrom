@@ -8,10 +8,18 @@
  */
 
 import { z } from 'zod';
-import { searchTermSchema } from '@/lib/validation';
+import {
+  cuidSchema,
+  optionalDateOnlySchema,
+  optionalEmailSchema,
+  optionalPersonNameSchema,
+  optionalPhoneSchema,
+  personNameSchema,
+  searchTermSchema,
+} from '@/lib/validation';
 import { apiRoute } from '@/server/http/api';
 import { RATE_LIMITS } from '@/server/security/rate-limit';
-import { listStudents } from '@/server/services/students/students';
+import { createStudent, listStudents } from '@/server/services/students/students';
 
 const querySchema = z.object({
   q: searchTermSchema.optional(),
@@ -35,6 +43,54 @@ export const GET = apiRoute(
         studentCode: row.studentCode,
         branchName: row.branchName,
       })),
+    );
+  },
+);
+
+const createStudentSchema = z.object({
+  firstName: personNameSchema,
+  lastName: personNameSchema,
+  middleName: optionalPersonNameSchema,
+  dateOfBirth: optionalDateOnlySchema,
+  gender: z.enum(['MALE', 'FEMALE', 'OTHER', 'UNSPECIFIED']).optional(),
+  phone: optionalPhoneSchema,
+  email: optionalEmailSchema,
+  addressLine: z.string().trim().max(300).optional(),
+  city: z.string().trim().max(120).optional(),
+  // Optional on purpose: a branch-scoped caller has exactly one answer, and
+  // `resolveWriteBranch` in the service supplies it rather than the form.
+  branchId: cuidSchema.nullish(),
+  notes: z.string().trim().max(2000).optional(),
+});
+
+export const POST = apiRoute(
+  {
+    permission: 'students.create',
+    body: createStudentSchema,
+    rateLimit: RATE_LIMITS.write,
+  },
+  async ({ ctx, body, ok }) => {
+    const student = await createStudent(ctx, {
+      firstName: body.firstName,
+      lastName: body.lastName,
+      middleName: body.middleName,
+      dateOfBirth: body.dateOfBirth,
+      gender: body.gender,
+      phone: body.phone,
+      email: body.email,
+      addressLine: body.addressLine,
+      city: body.city,
+      branchId: body.branchId,
+      notes: body.notes,
+    });
+
+    return ok(
+      {
+        id: student.id,
+        studentCode: student.studentCode,
+        fullName: student.fullName,
+      },
+      { status: 201 },
     );
   },
 );

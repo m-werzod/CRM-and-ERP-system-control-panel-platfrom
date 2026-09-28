@@ -1112,6 +1112,38 @@ async function main(): Promise<void> {
   done();
 
   // -------------------------------------------------------------------------
+  // Document counters
+  //
+  // Students, employees and applications are written straight through Prisma
+  // above, which means `nextStudentCode` and friends never saw them and their
+  // DocumentCounter rows do not exist. Left that way, the first student created
+  // through the UI is handed STU-000001 and dies on the unique index against a
+  // seeded row -- a bug that only appears after the seed looks like it worked.
+  //
+  // Invoices and payments are absent from this list on purpose: those DO go
+  // through the real use-cases, so their counters are already correct and
+  // rewriting them here would be the one way to break them.
+  // -------------------------------------------------------------------------
+  done = step('aligning document counters');
+  const directlyNumbered: ReadonlyArray<{ scope: string; count: number }> = [
+    { scope: 'student', count: await prisma.student.count({ where: { organizationId } }) },
+    { scope: 'employee', count: await prisma.employee.count({ where: { organizationId } }) },
+    { scope: 'application', count: await prisma.application.count({ where: { organizationId } }) },
+  ];
+
+  for (const { scope, count } of directlyNumbered) {
+    if (count === 0) continue;
+    // `nextValue` is the value the NEXT allocation hands out, so it is one past
+    // the rows that already exist. These scopes never reset, hence period '-'.
+    await prisma.documentCounter.upsert({
+      where: { organizationId_scope_period: { organizationId, scope, period: '-' } },
+      create: { organizationId, scope, period: '-', nextValue: count + 1 },
+      update: { nextValue: count + 1 },
+    });
+  }
+  done();
+
+  // -------------------------------------------------------------------------
   await report(random);
 }
 
