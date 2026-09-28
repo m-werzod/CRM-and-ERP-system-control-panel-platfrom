@@ -403,6 +403,8 @@ export const ru: Dictionary = {
   },
 
   leads: {
+    created: 'Обращение {name} добавлено.',
+    duplicateWarning: 'Обращение с этим номером уже существует. Оба сохранены — объедините их, если это один человек.',
     title: 'Лиды',
     subtitle: 'Все, кто обратился, но пока не зачислен.',
     create: 'Добавить лида',
@@ -565,6 +567,8 @@ export const ru: Dictionary = {
   },
 
   groups: {
+    created: 'Группа {name} создана.',
+    archiveTitle: 'Архивировать {name}?',
     emptyFiltered: {
       title: 'Ни одна группа не соответствует фильтрам',
       description: 'Попробуйте другой статус, уровень или программу.',

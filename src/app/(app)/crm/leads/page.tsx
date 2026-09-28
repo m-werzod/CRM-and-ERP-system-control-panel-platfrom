@@ -24,7 +24,10 @@ import {
 import { money as makeMoney } from '@/lib/money';
 import { requireContext } from '@/server/auth/context';
 import { viewerTranslator } from '@/server/i18n';
+import { can } from '@/server/rbac/access';
+import { listBranches } from '@/server/services/admin/organization';
 import { listLeads } from '@/server/services/crm/leads';
+import { AddLeadPanel } from './lead-actions';
 
 const STATUSES = [
   'NEW',
@@ -92,9 +95,17 @@ export default async function LeadsPage({
 
   const filtered = hasActiveFilters(params, [...FILTER_KEYS, 'q']);
 
+  const mayCreate = can(ctx, 'leads.create');
+  const branchRows = mayCreate && can(ctx, 'settings.view') ? await listBranches(ctx) : [];
+  const branches = branchRows.map((b) => ({ id: b.id, name: b.name }));
+
   return (
     <>
-      <PageHeader title={t.t('leads.title')} description={t.t('leads.subtitle')} />
+      <PageHeader
+        title={t.t('leads.title')}
+        description={t.t('leads.subtitle')}
+        actions={mayCreate ? <AddLeadPanel branches={branches} /> : undefined}
+      />
 
       <ListToolbar>
         <ListSearch placeholder={t.t('leads.searchPlaceholder')} />

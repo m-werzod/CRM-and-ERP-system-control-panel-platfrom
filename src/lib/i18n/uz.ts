@@ -399,6 +399,8 @@ export const uz: Dictionary = {
   },
 
   leads: {
+    created: '{name} murojaati qoʻshildi.',
+    duplicateWarning: 'Bu telefon raqami bilan murojaat allaqachon mavjud. Ikkalasi ham saqlandi — agar bir shaxs boʻlsa, ularni birlashtiring.',
     title: 'Murojaatlar',
     subtitle: "So'ragan, lekin hali o'qishga yozilmagan barcha shaxslar.",
     create: "Murojaat qo'shish",
@@ -561,6 +563,8 @@ export const uz: Dictionary = {
   },
 
   groups: {
+    created: '{name} guruhi yaratildi.',
+    archiveTitle: '{name} arxivlansinmi?',
     emptyFiltered: {
       title: 'Filtrlarga mos guruh topilmadi',
       description: 'Boshqa holat, daraja yoki dasturni tanlang.',

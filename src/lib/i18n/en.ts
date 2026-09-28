@@ -401,6 +401,8 @@ export const en = {
     primaryRequired: 'Each student needs exactly one primary contact.',
   },
   leads: {
+    created: 'Lead {name} was added.',
+    duplicateWarning: 'A lead with this phone number already exists. Both are kept — merge them if they are the same person.',
     title: 'Leads',
     subtitle: 'Everyone who enquired but has not enrolled yet.',
     create: 'Add lead',
@@ -563,6 +565,8 @@ export const en = {
   },
 
   groups: {
+    created: 'Group {name} was created.',
+    archiveTitle: 'Archive {name}?',
     emptyFiltered: {
       title: 'No group matches these filters',
       description: 'Try another status, level or program.',

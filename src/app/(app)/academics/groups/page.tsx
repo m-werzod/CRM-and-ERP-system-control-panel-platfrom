@@ -23,7 +23,12 @@ import {
 } from '@/lib/list-params';
 import { requireContext } from '@/server/auth/context';
 import { viewerTranslator } from '@/server/i18n';
+import { can } from '@/server/rbac/access';
 import { listGroups } from '@/server/services/academics/groups';
+import { listPrograms } from '@/server/services/academics/programs';
+import { listSubjects } from '@/server/services/academics/subjects';
+import { listBranches } from '@/server/services/admin/organization';
+import { AddGroupPanel, ArchiveGroupButton } from './group-actions';
 
 const STATUSES = [
   'PLANNED',
@@ -72,9 +77,37 @@ export default async function GroupsPage({
 
   const filtered = hasActiveFilters(params, [...FILTER_KEYS, 'q']);
 
+  const mayCreate = can(ctx, 'groups.create');
+  const mayArchive = can(ctx, 'groups.delete');
+
+  // Pickers are only fetched for a caller who will see the form, and only for
+  // the lists they hold a read permission on.
+  const [branchRows, programRows, subjectRows] = mayCreate
+    ? await Promise.all([
+        can(ctx, 'settings.view') ? listBranches(ctx) : Promise.resolve([]),
+        // Both catalogues are gated by `subjects.view` -- programmes have no
+        // permission module of their own -- and `can()` throws on a key that is
+        // not in the registry, so guessing one takes the whole page down.
+        can(ctx, 'subjects.view') ? listPrograms(ctx, { pageSize: 100 }) : Promise.resolve(null),
+        can(ctx, 'subjects.view') ? listSubjects(ctx, { pageSize: 100 }) : Promise.resolve(null),
+      ])
+    : [[], null, null];
+
+  const branches = branchRows.map((b) => ({ id: b.id, name: b.name }));
+  const programs = (programRows?.items ?? []).map((p) => ({ id: p.id, name: p.name }));
+  const subjects = (subjectRows?.items ?? []).map((x) => ({ id: x.id, name: x.name }));
+
   return (
     <>
-      <PageHeader title={t.t('groups.title')} description={t.t('groups.subtitle')} />
+      <PageHeader
+        title={t.t('groups.title')}
+        description={t.t('groups.subtitle')}
+        actions={
+          mayCreate ? (
+            <AddGroupPanel branches={branches} programs={programs} subjects={subjects} />
+          ) : undefined
+        }
+      />
 
       <ListToolbar>
         <ListSearch placeholder={t.t('groups.searchPlaceholder')} />
@@ -108,6 +141,11 @@ export default async function GroupsPage({
                 <TH numeric>{t.t('groups.fields.enrolled')}</TH>
                 <TH numeric>{t.t('groups.fields.seatsLeft')}</TH>
                 <TH>{t.t('groups.fields.status')}</TH>
+                {mayArchive && (
+                  <TH>
+                    <span className="sr-only">{t.t('common.actions')}</span>
+                  </TH>
+                )}
               </TR>
             </THead>
             <TBody>
@@ -143,6 +181,11 @@ export default async function GroupsPage({
                   <TD nowrap>
                     <StatusBadge status={row.status} label={t.t(`enums.GroupStatus.${row.status}`)} />
                   </TD>
+                  {mayArchive && (
+                    <TD>
+                      <ArchiveGroupButton groupId={row.id} name={row.name} />
+                    </TD>
+                  )}
                 </TR>
               ))}
             </TBody>
