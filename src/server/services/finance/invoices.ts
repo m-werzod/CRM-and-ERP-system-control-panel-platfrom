@@ -8,8 +8,8 @@
  * price, and the totals are recomputed only while the invoice is still DRAFT.
  */
 
-import type { InvoiceItemKind, Prisma } from '@/generated/prisma/client';
-import { withTransaction, type Db, type Tx } from '@/server/db/client';
+import type { InvoiceItemKind, InvoiceStatus, Prisma } from '@/generated/prisma/client';
+import { prisma, withTransaction, type Db, type Tx } from '@/server/db/client';
 import {
   BusinessRuleError,
   NotFoundError,
@@ -22,8 +22,10 @@ import {
 } from '@/server/audit';
 import {
   assertBranchAccess,
+  composeReadFilter,
   requirePermission,
   scopeFilter,
+  selfStudentFilter,
   type AccessContext,
 } from '@/server/rbac/access';
 import { getSettings } from '@/server/settings';
@@ -847,4 +849,199 @@ export async function markOverdueInvoices(
   });
 
   return { marked: result.count };
+}
+
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
+export interface ListInvoicesInput {
+  readonly page?: number;
+  readonly pageSize?: number;
+  /** Invoice number, or the student's name or code. */
+  readonly q?: string;
+  readonly status?: readonly InvoiceStatus[];
+  readonly studentId?: string;
+  readonly branchId?: string;
+  /** Calendar range over `issueDate`, in the branch's timezone. */
+  readonly from?: DateOnly;
+  readonly to?: DateOnly;
+  /** Only invoices past their due date with something still owing. */
+  readonly overdueOnly?: boolean;
+  readonly sortBy?: 'issueDate' | 'dueDate' | 'invoiceNumber' | 'balanceMinor';
+  readonly sortDir?: 'asc' | 'desc';
+}
+
+export interface InvoiceListRow {
+  readonly id: string;
+  readonly invoiceNumber: string;
+  readonly status: InvoiceStatus;
+  readonly currency: string;
+  readonly studentId: string;
+  readonly studentName: string;
+  readonly studentCode: string;
+  readonly branchId: string;
+  readonly branchName: string;
+  readonly totalMinor: bigint;
+  readonly paidTotalMinor: bigint;
+  readonly balanceMinor: bigint;
+  readonly issueDate: Date;
+  readonly dueDate: Date;
+  readonly paidAt: Date | null;
+  /** Past its due date with a balance. Derived here so every caller agrees. */
+  readonly isOverdue: boolean;
+}
+
+export interface ListInvoicesResult {
+  readonly rows: readonly InvoiceListRow[];
+  readonly total: number;
+  readonly page: number;
+  readonly pageSize: number;
+}
+
+const INVOICE_PAGE_SIZE_CEILING = 100;
+
+/**
+ * Invoices the caller may see.
+ *
+ * "Open" for the overdue test means a status that can still be paid: a
+ * cancelled, void or written-off invoice keeps whatever balance it had, and
+ * counting those as overdue would put money in the debt column that nobody is
+ * going to collect.
+ */
+export async function listInvoices(
+  ctx: AccessContext,
+  input: ListInvoicesInput = {},
+  db: Db = prisma,
+): Promise<ListInvoicesResult> {
+  requirePermission(ctx, 'invoices.view');
+
+  const page = Math.max(1, Math.trunc(input.page ?? 1));
+  const pageSize = Math.min(
+    INVOICE_PAGE_SIZE_CEILING,
+    Math.max(1, Math.trunc(input.pageSize ?? 25)),
+  );
+
+  // A student or guardian reaches their own invoices through the student they
+  // are; staff hold `invoices.view` and are not narrowed further than branch.
+  const where = composeReadFilter(ctx, {
+    selfFilter: { student: selfStudentFilter(ctx) },
+  }) as Prisma.InvoiceWhereInput;
+
+  if (input.branchId) {
+    assertBranchAccess(ctx, input.branchId, 'invoice');
+    where.branchId = input.branchId;
+  }
+  if (input.studentId) where.studentId = input.studentId;
+  if (input.status && input.status.length > 0) where.status = { in: [...input.status] };
+
+  const and: Prisma.InvoiceWhereInput[] = [];
+
+  if (input.q) {
+    const term = input.q.trim();
+    if (term) {
+      and.push({
+        OR: [
+          { invoiceNumber: { contains: term, mode: 'insensitive' } },
+          { student: { firstName: { contains: term, mode: 'insensitive' } } },
+          { student: { lastName: { contains: term, mode: 'insensitive' } } },
+          { student: { studentCode: { contains: term, mode: 'insensitive' } } },
+        ],
+      });
+    }
+  }
+
+  if (input.from || input.to) {
+    const { timezone } = await getSettings(
+      ['timezone'],
+      { organizationId: ctx.organizationId, branchId: input.branchId ?? null },
+      db,
+    );
+    const from = input.from ?? '1970-01-01';
+    const to = input.to ?? todayIn(timezone);
+    // `issueDate` is a DATE column, so the comparison is calendar-to-calendar
+    // and needs no zone conversion -- unlike the instant columns elsewhere.
+    where.issueDate = { gte: dateOnlyToPrismaDate(from), lte: dateOnlyToPrismaDate(to) };
+  }
+
+  if (input.overdueOnly) {
+    const { timezone } = await getSettings(
+      ['timezone'],
+      { organizationId: ctx.organizationId, branchId: input.branchId ?? null },
+      db,
+    );
+    and.push({
+      balanceMinor: { gt: 0 },
+      dueDate: { lt: dateOnlyToPrismaDate(todayIn(timezone)) },
+      status: { notIn: ['DRAFT', 'CANCELLED', 'VOID', 'WRITTEN_OFF'] },
+    });
+  }
+
+  if (and.length > 0) where.AND = and;
+
+  const sortBy = input.sortBy ?? 'issueDate';
+  const sortDir = input.sortDir ?? 'desc';
+
+  const [total, rows] = await Promise.all([
+    db.invoice.count({ where }),
+    db.invoice.findMany({
+      where,
+      orderBy: { [sortBy]: sortDir },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        invoiceNumber: true,
+        status: true,
+        currency: true,
+        studentId: true,
+        branchId: true,
+        totalMinor: true,
+        paidTotalMinor: true,
+        balanceMinor: true,
+        issueDate: true,
+        dueDate: true,
+        paidAt: true,
+        student: { select: { firstName: true, lastName: true, studentCode: true } },
+        branch: { select: { name: true } },
+      },
+    }),
+  ]);
+
+  const { timezone } = await getSettings(
+    ['timezone'],
+    { organizationId: ctx.organizationId, branchId: input.branchId ?? null },
+    db,
+  );
+  const today = dateOnlyToPrismaDate(todayIn(timezone));
+  const collectable: ReadonlySet<InvoiceStatus> = new Set<InvoiceStatus>([
+    'ISSUED',
+    'PARTIALLY_PAID',
+    'OVERDUE',
+  ]);
+
+  return {
+    rows: rows.map((row) => ({
+      id: row.id,
+      invoiceNumber: row.invoiceNumber,
+      status: row.status,
+      currency: row.currency,
+      studentId: row.studentId,
+      studentName: `${row.student.firstName} ${row.student.lastName}`,
+      studentCode: row.student.studentCode,
+      branchId: row.branchId,
+      branchName: row.branch.name,
+      totalMinor: row.totalMinor,
+      paidTotalMinor: row.paidTotalMinor,
+      balanceMinor: row.balanceMinor,
+      issueDate: row.issueDate,
+      dueDate: row.dueDate,
+      paidAt: row.paidAt,
+      isOverdue:
+        row.balanceMinor > 0n && row.dueDate < today && collectable.has(row.status),
+    })),
+    total,
+    page,
+    pageSize,
+  };
 }

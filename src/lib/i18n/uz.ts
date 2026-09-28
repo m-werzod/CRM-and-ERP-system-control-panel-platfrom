@@ -1000,6 +1000,7 @@ export const uz: Dictionary = {
   },
 
   invoices: {
+    overdueOnly: 'Faqat muddati oʻtganlar',
     title: 'Hisob-fakturalar',
     subtitle: "Nima hisoblangani, nima to'langani va nima qarz qolgani.",
     create: 'Hisob-faktura yaratish',

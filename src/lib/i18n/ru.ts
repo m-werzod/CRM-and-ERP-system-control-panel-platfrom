@@ -1005,6 +1005,7 @@ export const ru: Dictionary = {
   },
 
   invoices: {
+    overdueOnly: 'Только просроченные',
     title: 'Счета',
     subtitle: 'Что начислено, что оплачено и что ещё не погашено.',
     create: 'Создать счёт',

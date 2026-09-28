@@ -26,6 +26,8 @@ const BUILT_ROUTES: ReadonlySet<string> = new Set([
   '/guardians',
   '/academics/groups',
   '/academics/exams',
+  '/finance/invoices',
+  '/finance/payments',
   '/hr/employees',
   '/hr/leave',
   '/hr/payroll',

@@ -57,6 +57,30 @@ export async function apiPost<T>(path: string, body?: unknown): Promise<ApiRespo
   }
 }
 
+/**
+ * Read-only fetch. No CSRF header: `verifyCsrf` never checks a safe method, and
+ * sending one would imply this call changes something.
+ */
+export async function apiGet<T>(path: string, params?: Record<string, string | undefined>): Promise<ApiResponse<T>> {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(params ?? {})) {
+    if (value !== undefined && value !== '') query.set(key, value);
+  }
+  const suffix = query.toString();
+
+  try {
+    const response = await fetch(suffix ? `${path}?${suffix}` : path, {
+      headers: { Accept: 'application/json' },
+      credentials: 'same-origin',
+    });
+    const parsed: unknown = await response.json();
+    if (isApiResponse<T>(parsed)) return parsed;
+    return networkFailure(`Unexpected response (HTTP ${response.status})`);
+  } catch {
+    return networkFailure('fetch failed');
+  }
+}
+
 function isApiResponse<T>(value: unknown): value is ApiResponse<T> {
   return typeof value === 'object' && value !== null && typeof (value as { ok?: unknown }).ok === 'boolean';
 }

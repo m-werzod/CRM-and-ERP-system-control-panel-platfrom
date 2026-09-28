@@ -20,8 +20,8 @@
  * needed — neither substitutes for the other.
  */
 
-import type { PaymentMethod, Prisma } from '@/generated/prisma/client';
-import { withSerializableRetry, type Db, type Tx } from '@/server/db/client';
+import type { PaymentMethod, PaymentStatus, Prisma } from '@/generated/prisma/client';
+import { prisma, withSerializableRetry, type Db, type Tx } from '@/server/db/client';
 import {
   BusinessRuleError,
   ConflictError,
@@ -31,12 +31,15 @@ import {
 import { AUDIT_ACTIONS, record as recordAudit } from '@/server/audit';
 import {
   assertBranchAccess,
+  composeReadFilter,
   requirePermission,
   scopeFilter,
+  selfStudentFilter,
   type AccessContext,
 } from '@/server/rbac/access';
 import { getSettings } from '@/server/settings';
 import { logger } from '@/server/observability/logger';
+import { dayRangeToInstants, todayIn, type DateOnly } from '@/lib/dates';
 import { formatMoney, money } from '@/lib/money';
 import { appendLedgerEntry, recalculateInvoice, reverseLedgerEntry } from '@/server/services/finance/ledger';
 import { nextPaymentNumber } from '@/server/services/finance/numbering';
@@ -604,4 +607,176 @@ export async function reversePayment(
     },
     { existing: db },
   );
+}
+
+// ---------------------------------------------------------------------------
+// Reading
+// ---------------------------------------------------------------------------
+
+export interface ListPaymentsInput {
+  readonly page?: number;
+  readonly pageSize?: number;
+  /** Payment number, reference, or the student's name or code. */
+  readonly q?: string;
+  readonly method?: readonly PaymentMethod[];
+  readonly status?: readonly PaymentStatus[];
+  readonly studentId?: string;
+  readonly invoiceId?: string;
+  readonly branchId?: string;
+  /** Calendar range over `receivedAt`, resolved in the branch's timezone. */
+  readonly from?: DateOnly;
+  readonly to?: DateOnly;
+  readonly sortDir?: 'asc' | 'desc';
+}
+
+export interface PaymentListRow {
+  readonly id: string;
+  readonly paymentNumber: string;
+  readonly method: PaymentMethod;
+  readonly status: PaymentStatus;
+  readonly amountMinor: bigint;
+  readonly currency: string;
+  readonly studentId: string;
+  readonly studentName: string;
+  readonly studentCode: string;
+  readonly invoiceId: string | null;
+  readonly invoiceNumber: string | null;
+  readonly branchId: string;
+  readonly branchName: string;
+  readonly receivedAt: Date;
+  readonly receivedByName: string | null;
+  readonly reference: string | null;
+  readonly reversedAt: Date | null;
+}
+
+export interface ListPaymentsResult {
+  readonly rows: readonly PaymentListRow[];
+  readonly total: number;
+  readonly page: number;
+  readonly pageSize: number;
+}
+
+const PAYMENT_PAGE_SIZE_CEILING = 100;
+
+/**
+ * Payments the caller may see.
+ *
+ * A reversed payment is returned, not hidden. The ledger keeps both the original
+ * entry and its reversal, and a list that quietly dropped the original would
+ * disagree with the audit trail and with the parent's receipt.
+ */
+export async function listPayments(
+  ctx: AccessContext,
+  input: ListPaymentsInput = {},
+  db: Db = prisma,
+): Promise<ListPaymentsResult> {
+  requirePermission(ctx, 'payments.view');
+
+  const page = Math.max(1, Math.trunc(input.page ?? 1));
+  const pageSize = Math.min(
+    PAYMENT_PAGE_SIZE_CEILING,
+    Math.max(1, Math.trunc(input.pageSize ?? 25)),
+  );
+
+  const where = composeReadFilter(ctx, {
+    selfFilter: { student: selfStudentFilter(ctx) },
+  }) as Prisma.PaymentWhereInput;
+
+  if (input.branchId) {
+    assertBranchAccess(ctx, input.branchId, 'payment');
+    where.branchId = input.branchId;
+  }
+  if (input.studentId) where.studentId = input.studentId;
+  if (input.invoiceId) where.invoiceId = input.invoiceId;
+  if (input.method && input.method.length > 0) where.method = { in: [...input.method] };
+  if (input.status && input.status.length > 0) where.status = { in: [...input.status] };
+
+  const and: Prisma.PaymentWhereInput[] = [];
+
+  const term = input.q?.trim();
+  if (term) {
+    and.push({
+      OR: [
+        { paymentNumber: { contains: term, mode: 'insensitive' } },
+        { reference: { contains: term, mode: 'insensitive' } },
+        { student: { firstName: { contains: term, mode: 'insensitive' } } },
+        { student: { lastName: { contains: term, mode: 'insensitive' } } },
+        { student: { studentCode: { contains: term, mode: 'insensitive' } } },
+      ],
+    });
+  }
+
+  if (input.from || input.to) {
+    const { timezone } = await getSettings(
+      ['timezone'],
+      { organizationId: ctx.organizationId, branchId: input.branchId ?? null },
+      db,
+    );
+    // `receivedAt` is an instant, so a calendar range has to be resolved in an
+    // explicit zone before it can bound it. A naive UTC range would put a
+    // Tashkent evening payment on the following day.
+    const range = dayRangeToInstants(
+      input.from ?? '1970-01-01',
+      input.to ?? todayIn(timezone),
+      timezone,
+    );
+    where.receivedAt = { gte: range.from, lt: range.toExclusive };
+  }
+
+  if (and.length > 0) where.AND = and;
+
+  const [total, rows] = await Promise.all([
+    db.payment.count({ where }),
+    db.payment.findMany({
+      where,
+      orderBy: { receivedAt: input.sortDir ?? 'desc' },
+      skip: (page - 1) * pageSize,
+      take: pageSize,
+      select: {
+        id: true,
+        paymentNumber: true,
+        method: true,
+        status: true,
+        amountMinor: true,
+        currency: true,
+        studentId: true,
+        invoiceId: true,
+        branchId: true,
+        receivedAt: true,
+        reference: true,
+        reversedAt: true,
+        student: { select: { firstName: true, lastName: true, studentCode: true } },
+        invoice: { select: { invoiceNumber: true } },
+        branch: { select: { name: true } },
+        receivedBy: { select: { firstName: true, lastName: true } },
+      },
+    }),
+  ]);
+
+  return {
+    rows: rows.map((row) => ({
+      id: row.id,
+      paymentNumber: row.paymentNumber,
+      method: row.method,
+      status: row.status,
+      amountMinor: row.amountMinor,
+      currency: row.currency,
+      studentId: row.studentId,
+      studentName: `${row.student.firstName} ${row.student.lastName}`,
+      studentCode: row.student.studentCode,
+      invoiceId: row.invoiceId,
+      invoiceNumber: row.invoice?.invoiceNumber ?? null,
+      branchId: row.branchId,
+      branchName: row.branch.name,
+      receivedAt: row.receivedAt,
+      receivedByName: row.receivedBy
+        ? `${row.receivedBy.firstName} ${row.receivedBy.lastName}`
+        : null,
+      reference: row.reference,
+      reversedAt: row.reversedAt,
+    })),
+    total,
+    page,
+    pageSize,
+  };
 }

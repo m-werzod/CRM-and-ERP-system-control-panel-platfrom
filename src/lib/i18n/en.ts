@@ -998,6 +998,7 @@ export const en = {
   },
 
   invoices: {
+    overdueOnly: 'Overdue only',
     title: 'Invoices',
     subtitle: 'What was billed, what is paid and what is still owed.',
     create: 'Create invoice',
